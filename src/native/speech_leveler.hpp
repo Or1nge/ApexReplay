@@ -61,8 +61,6 @@ public:
         for(int i=0;i<speech::window;++i){hann_[i]=.5-.5*std::cos(2*speech::pi*(i+.5)/speech::window);sumW2_+=hann_[i]*hann_[i];}
         for(int lag=0;lag<speech::window;++lag){double s=0;for(int i=0;i+lag<speech::window;++i)s+=hann_[i]*hann_[i+lag];windowAc_[lag]=s/sumW2_;}
     }
-    double floorDb()const{return floorDb_;}
-    int pitchRun()const{return static_cast<int>(std::max(pitchRun_.size(),steadyRun_.size()));}
     Frame analyze(const double* input){
         std::move(buffer_.begin()+speech::analysisHop,buffer_.end(),buffer_.begin());
         std::copy(input,input+speech::analysisHop,buffer_.end()-speech::analysisHop);

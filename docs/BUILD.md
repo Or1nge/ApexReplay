@@ -12,7 +12,7 @@ PowerShell 7 中运行：
 ./tests/video-smoke.ps1
 ```
 
-构建包含规则和原生缓存/音频测试，并发布自包含程序到 `dist/Apex回放`。重新构建前应退出运行中的应用和工作进程，以免 Windows 锁住需要替换的 EXE/DLL。
+构建包含规则、人声平衡和原生缓存/音频测试，并发布自包含程序到 `dist/Apex回放`。人声平衡测试 `tests/speech_tests.cpp` 只依赖标准 C++20，也可以在其他平台直接编译运行（如 `g++ -std=c++20 -O2 tests/speech_tests.cpp`）。重新构建前应退出运行中的应用和工作进程，以免 Windows 锁住需要替换的 EXE/DLL。
 
 运行中的版本需要保留时，可使用 `./scripts/build.ps1 -OutputDirectory './artifacts/new-build'` 在独立目录构建和测试。设置回归测试使用隔离的设置文件，验证修改后立刻退出、再次启动、麦克风暂未连接时的配置恢复。
 
