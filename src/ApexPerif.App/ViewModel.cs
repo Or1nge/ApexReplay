@@ -13,7 +13,8 @@ public sealed class ViewModel : INotifyPropertyChanged
     private void Changed([CallerMemberName] string? name=null) => PropertyChanged?.Invoke(this,new(name));
     private bool Set<T>(ref T field,T value,[CallerMemberName]string? name=null)
     { if(EqualityComparer<T>.Default.Equals(field,value))return false;field=value;Changed(name);return true; }
-    private string output="",mic="",title="正在准备",detail="",bufferTime="—",bufferSize="—",memoryBudget="",last="";
+    private string output="",mic="",title="正在准备",detail="",bufferTime="0:00",memoryLine="";
+    private double bufferSeconds;
     private string? captureSize;
     private int savedCount;
     private double sp=5,so=3,lp=10,lo=5,balance=0,gameLevel,micLevel,desktopLevel;
@@ -45,19 +46,20 @@ public sealed class ViewModel : INotifyPropertyChanged
     public double LongPre {get=>lp;set{if(Set(ref lp,Math.Clamp(value,0,30)))SettingsChanged?.Invoke();}}
     public double LongPost {get=>lo;set{if(Set(ref lo,Math.Clamp(value,0,20)))SettingsChanged?.Invoke();}}
     public double Balance {get=>balance;set{if(Set(ref balance,Math.Clamp(value,-12,12)))SettingsChanged?.Invoke();}}
-    public double ReplayMinutes {get=>replayMinutes;set{if(Set(ref replayMinutes,Math.Clamp(Math.Round(value),1,120)))SettingsChanged?.Invoke();}}
+    public double ReplayMinutes {get=>replayMinutes;set{if(Set(ref replayMinutes,Math.Clamp(Math.Round(value),1,120))){Changed(nameof(BufferProgress));SettingsChanged?.Invoke();}}}
     public double MemoryPercent {get=>memoryPercent;set{if(Set(ref memoryPercent,Math.Clamp(Math.Round(value),10,90)))SettingsChanged?.Invoke();}}
     public bool Ready {get=>ready;set=>Set(ref ready,value);}
-    public bool Running {get=>running;set{if(Set(ref running,value)){Changed(nameof(StartButtonText));Changed(nameof(StartButtonIcon));Changed(nameof(VideoSettingsEnabled));}}}
+    public bool Running {get=>running;set{if(Set(ref running,value)){Changed(nameof(StartButtonText));Changed(nameof(VideoSettingsEnabled));}}}
     public string StartButtonText=>running?"停止采集":"开始采集";
-    public string StartButtonIcon=>running?"\uE71A":"\uE768";
     public string StatusTitle {get=>title;set=>Set(ref title,value);}
     public string StatusDetail {get=>detail;set=>Set(ref detail,value);}
     public string BufferTime {get=>bufferTime;set=>Set(ref bufferTime,value);}
-    public string BufferSize {get=>bufferSize;set=>Set(ref bufferSize,value);}
-    public string MemoryBudget {get=>memoryBudget;set=>Set(ref memoryBudget,value);}
+    /// <summary>Buffered history as a fraction of the configured maximum.</summary>
+    public double BufferProgress=>Math.Clamp(bufferSeconds/(ReplayMinutes*60),0,1);
+    public string MemoryLine {get=>memoryLine;set=>Set(ref memoryLine,value);}
+    /// <summary>Clips saved since the app started.</summary>
     public int SavedCount {get=>savedCount;set=>Set(ref savedCount,value);}
-    public string LastSaved {get=>last;set=>Set(ref last,value);}
+    public ObservableCollection<SavedClip> Clips {get;}=[];
     public System.Windows.Media.Brush StatusBrush {get=>statusBrush;set=>Set(ref statusBrush,value);}
     public double GameLevel {get=>gameLevel;set=>Set(ref gameLevel,value);}
     public double MicLevel {get=>micLevel;set=>Set(ref micLevel,value);}
@@ -87,12 +89,13 @@ public sealed class ViewModel : INotifyPropertyChanged
     }
     public void ApplyBuffer(double seconds,double bytes,double budgetBytes)
     {
-        var time=TimeSpan.FromSeconds(Math.Max(0,seconds));
+        bufferSeconds=Math.Max(0,seconds);Changed(nameof(BufferProgress));
+        var time=TimeSpan.FromSeconds(bufferSeconds);
         BufferTime=$"{(int)time.TotalMinutes}:{time.Seconds:00}";
-        BufferSize=bytes>=1024d*1024*1024?$"{bytes/Math.Pow(1024,3):0.0} GiB":$"{bytes/(1024*1024):0} MiB";
-        MemoryBudget=budgetBytes>0?$"内存上限 {budgetBytes/Math.Pow(1024,3):0.0} GiB":"";
+        string size=bytes>=1024d*1024*1024?$"{bytes/Math.Pow(1024,3):0.0} GiB":$"{bytes/(1024*1024):0} MiB";
+        MemoryLine=budgetBytes>0?$"{size} · 内存上限 {budgetBytes/Math.Pow(1024,3):0.0} GiB":size;
     }
-    public void ResetBuffer(){BufferTime=BufferSize="—";MemoryBudget="";CaptureSize=null;}
+    public void ResetBuffer(){bufferSeconds=0;Changed(nameof(BufferProgress));BufferTime="0:00";MemoryLine="";CaptureSize=null;}
     public bool Retry {get=>retry;set{if(Set(ref retry,value))Changed(nameof(RetryVisibility));}}
     public System.Windows.Visibility RetryVisibility=>retry?System.Windows.Visibility.Visible:System.Windows.Visibility.Collapsed;
     public ObservableCollection<Microphone> Microphones {get;}=[new("","默认通信设备")];

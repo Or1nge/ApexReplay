@@ -1,22 +1,25 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
  <!-- Dark palette; swapped at runtime by Themes.Apply. -->
- <SolidColorBrush x:Key="WindowBrush" Color="#0D1016"/>
- <SolidColorBrush x:Key="SurfaceBrush" Color="#151A22"/>
- <SolidColorBrush x:Key="ControlBrush" Color="#1C222D"/>
- <SolidColorBrush x:Key="ControlHoverBrush" Color="#242B38"/>
- <SolidColorBrush x:Key="PopupBrush" Color="#1A2029"/>
- <SolidColorBrush x:Key="LineBrush" Color="#232A36"/>
- <SolidColorBrush x:Key="LineHoverBrush" Color="#323B4A"/>
- <SolidColorBrush x:Key="TextBrush" Color="#E9EEF5"/>
- <SolidColorBrush x:Key="MutedBrush" Color="#8B97A8"/>
- <SolidColorBrush x:Key="SubtleBrush" Color="#5D697B"/>
- <SolidColorBrush x:Key="Accent" Color="#F0484E"/>
- <SolidColorBrush x:Key="GoodBrush" Color="#3DD68C"/>
+ <SolidColorBrush x:Key="WindowBrush" Color="#0E0F12"/>
+ <SolidColorBrush x:Key="SurfaceBrush" Color="#141519"/>
+ <SolidColorBrush x:Key="CardBrush" Color="#1B1C21"/>
+ <SolidColorBrush x:Key="ControlBrush" Color="#24252B"/>
+ <SolidColorBrush x:Key="ControlHoverBrush" Color="#2C2D34"/>
+ <SolidColorBrush x:Key="PopupBrush" Color="#1F2025"/>
+ <SolidColorBrush x:Key="LineBrush" Color="#26272D"/>
+ <SolidColorBrush x:Key="LineHoverBrush" Color="#3A3B43"/>
+ <SolidColorBrush x:Key="TextBrush" Color="#EDEDEF"/>
+ <SolidColorBrush x:Key="MutedBrush" Color="#9A9BA3"/>
+ <SolidColorBrush x:Key="SubtleBrush" Color="#63646C"/>
+ <SolidColorBrush x:Key="Accent" Color="#E5484D"/>
+ <SolidColorBrush x:Key="AccentSoftBrush" Color="#2EE5484D"/>
+ <SolidColorBrush x:Key="GoodBrush" Color="#30C47A"/>
  <SolidColorBrush x:Key="WarnBrush" Color="#F5A524"/>
  <SolidColorBrush x:Key="WarnSoftBrush" Color="#2B2214"/>
  <SolidColorBrush x:Key="WarnLineBrush" Color="#4A3A1C"/>
  <SolidColorBrush x:Key="OverlayBrush" Color="#FFFFFF"/>
- <SolidColorBrush x:Key="ThumbBrush" Color="#F4F7FB"/>
- <SolidColorBrush x:Key="ThumbLineBrush" Color="#F4F7FB"/>
+ <SolidColorBrush x:Key="ThumbBrush" Color="#FFFFFF"/>
+ <SolidColorBrush x:Key="ThumbLineBrush" Color="#00000000"/>
+ <SolidColorBrush x:Key="InverseBrush" Color="#141519"/>
 </ResourceDictionary>

@@ -16,7 +16,7 @@ public partial class MainWindow : Window
     private WorkerClient? client;
     private Forms.NotifyIcon? tray;
     private System.Drawing.Icon? trayIcon;
-    private bool exiting,settingsLoaded;
+    private bool exiting,settingsLoaded,uiPreview;
     private string? restoredMicrophoneId;
     private readonly Dictionary<int,string> audioErrors=new();
     private readonly DispatcherTimer changes=new(){Interval=TimeSpan.FromMilliseconds(350)};
@@ -41,10 +41,11 @@ public partial class MainWindow : Window
         model.PropertyChanged+=(_,e)=>{if(e.PropertyName==nameof(ViewModel.Theme))ApplyTheme();};
         themeClock.Tick+=(_,_)=>ApplyTheme();themeClock.Start();
         SourceInitialized+=(_,_)=>UpdateTitleBar();
-        var icon=BitmapDecoder.Create(new Uri("pack://application:,,,/Assets/apex-replay.ico"),BitmapCreateOptions.None,BitmapCacheOption.OnLoad);
-        HeaderIcon.Source=icon.Frames.Where(f=>f.PixelWidth<=64).OrderByDescending(f=>f.PixelWidth).FirstOrDefault()??icon.Frames[0];
         model.StatusBrush=IdleBrush;
         Loaded+=LoadedAsync;Closing+=OnClosing;
+        // The folder can change outside the app (clips deleted or moved), so re-read it whenever the window comes back.
+        Activated+=(_,_)=>RefreshClips();
+        model.PropertyChanged+=(_,e)=>{if(e.PropertyName==nameof(ViewModel.OutputDirectory))RefreshClips();};
         model.SettingsChanged+=()=>{if(settingsLoaded){SaveSettings();changes.Stop();changes.Start();}};
         changes.Tick+=async(_,_)=>{changes.Stop();if(model.Running&&client is not null)try{await client.SendAsync("configure",model.Settings());}catch(Exception e){Error(e.Message);}};
     }
@@ -54,10 +55,15 @@ public partial class MainWindow : Window
         bool integration=args.Length>=3&&args[1]=="--integration-smoke";
         if(args.Length>=3&&args[1]=="--ui-smoke")
         {
-            model.Ready=true;model.Running=true;model.OutputDirectory=@"G:\ApexHighlights";
+            uiPreview=true;model.Ready=true;model.Running=true;model.OutputDirectory=@"G:\ApexHighlights";
             model.StatusTitle="正在缓存";model.StatusDetail="HUD 已识别";
             model.ApplyBuffer(143,684d*1024*1024,47.6*Math.Pow(1024,3));model.CaptureSize="2560×1440";
-            model.SavedCount=3;model.LastSaved="Apex-20261003-213512.mp4";
+            model.SavedCount=3;
+            var now=DateTime.Now;
+            model.Clips.Add(new(@"G:\ApexHighlights\a.mp4",now.AddMinutes(-4),48L<<20,3,42,true));
+            model.Clips.Add(new(@"G:\ApexHighlights\b.mp4",now.AddMinutes(-21),36L<<20,2,31));
+            model.Clips.Add(new(@"G:\ApexHighlights\c.mp4",now.AddMinutes(-47),77L<<20,4,65));
+            model.Clips.Add(new(@"G:\ApexHighlights\d.mp4",now.AddDays(-1),33L<<20,2));
             model.ApplyAudioLevels([.12,.04,0],[true,true,true]);
             model.StatusBrush=GoodBrush;
             themeClock.Stop();
@@ -66,13 +72,12 @@ public partial class MainWindow : Window
                 var bitmap=new RenderTargetBitmap((int)ActualWidth,(int)ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(this);
                 var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(path);png.Save(file);
             }
-            // ui.png / ui.settings.png in dark, ui.light.png / ui.light.settings.png in light.
-            var scroll=Descendants<System.Windows.Controls.ScrollViewer>(this).First();
+            // Overview and settings pages: ui.png / ui.settings.png in dark, ui.light.png / ui.light.settings.png in light.
             foreach(var light in new[]{false,true})
             {
-                Themes.Apply(light);UpdateTitleBar();scroll.ScrollToTop();await Task.Delay(500);UpdateLayout();
+                Themes.Apply(light);UpdateTitleBar();NavHome.IsChecked=true;await Task.Delay(500);UpdateLayout();
                 var path=light?Path.ChangeExtension(args[2],"light.png"):args[2];Snapshot(path);
-                scroll.ScrollToBottom();await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"settings.png"));
+                NavSettings.IsChecked=true;await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"settings.png"));
             }
             exiting=true;System.Windows.Application.Current.Shutdown();return;
         }
@@ -133,13 +138,9 @@ public partial class MainWindow : Window
         bool light=Themes.LightActive;
         var dark=light?0:1;DwmSetWindowAttribute(handle,20,ref dark,sizeof(int));
         // Windows 11: title bar matches the window background (COLORREF 0x00BBGGRR).
-        var caption=light?0xF8F5F3:0x16100D;DwmSetWindowAttribute(handle,35,ref caption,sizeof(int));
+        var caption=light?0xF2EFEE:0x120F0E;DwmSetWindowAttribute(handle,35,ref caption,sizeof(int));
     }
     private async Task ExitForTestAsync(){exiting=true;changes.Stop();tray?.Dispose();trayIcon?.Dispose();if(client is not null)await client.DisposeAsync();System.Windows.Application.Current.Shutdown();}
-    private static IEnumerable<T> Descendants<T>(DependencyObject root)where T:DependencyObject
-    {
-        for(int i=0;i<VisualTreeHelper.GetChildrenCount(root);i++){var child=VisualTreeHelper.GetChild(root,i);if(child is T item)yield return item;foreach(var nested in Descendants<T>(child))yield return nested;}
-    }
     private void CreateTray()
     {
         var menu=new Forms.ContextMenuStrip();
@@ -190,6 +191,34 @@ public partial class MainWindow : Window
             model.StatusTitle="等待 Apex";model.StatusDetail="游戏窗口出现后自动开始缓存";model.StatusBrush=BusyBrush;
         }
         catch(Exception error){Error(error.Message);}
+    }
+    private const int ClipLimit=30;
+    private void RefreshClips()
+    {
+        if(uiPreview)return;
+        var files=SavedClip.Scan(model.OutputDirectory,ClipLimit);
+        if(files.Select(f=>f.FullName).SequenceEqual(model.Clips.Select(c=>c.Path),StringComparer.OrdinalIgnoreCase))return;
+        var known=model.Clips.ToDictionary(c=>c.Path,StringComparer.OrdinalIgnoreCase);
+        model.Clips.Clear();
+        // Keep live entries (they know duration and squad wipe) and their thumbnails.
+        foreach(var file in files){var clip=known.TryGetValue(file.FullName,out var existing)?existing:SavedClip.FromFile(file);model.Clips.Add(clip);Thumbnails.Request(clip);}
+    }
+    private void AddClip(SavedClip clip)
+    {
+        var old=model.Clips.FirstOrDefault(c=>string.Equals(c.Path,clip.Path,StringComparison.OrdinalIgnoreCase));if(old is not null)model.Clips.Remove(old);
+        model.Clips.Insert(0,clip);while(model.Clips.Count>ClipLimit)model.Clips.RemoveAt(model.Clips.Count-1);
+        Thumbnails.Request(clip);
+    }
+    private void Clip_Click(object sender,RoutedEventArgs e)
+    {
+        if((sender as FrameworkElement)?.DataContext is not SavedClip clip)return;
+        try{Process.Start(new ProcessStartInfo(clip.Path){UseShellExecute=true});}catch(Exception error){Error(error.Message);}
+    }
+    private void ShowClip_Click(object sender,RoutedEventArgs e)
+    {
+        e.Handled=true; // the row behind would otherwise open the video too
+        if((sender as FrameworkElement)?.DataContext is not SavedClip clip)return;
+        try{Process.Start(new ProcessStartInfo("explorer.exe",$"/select,\"{clip.Path}\""){UseShellExecute=true});}catch(Exception error){Error(error.Message);}
     }
     private void OpenFolder_Click(object sender,RoutedEventArgs e)
     {
@@ -255,7 +284,16 @@ public partial class MainWindow : Window
         }
         else if(type=="saved")
         {
-            model.SavedCount++;model.LastSaved=Path.GetFileName(message.GetProperty("path").GetString())??"";
+            model.SavedCount++;
+            var path=message.GetProperty("path").GetString()??"";
+            if(path.Length==0)return;
+            double seconds=0;bool wipe=false;
+            if(message.TryGetProperty("clip",out var clip))
+            {
+                seconds=clip.GetProperty("end").GetDouble()-clip.GetProperty("start").GetDouble();
+                wipe=clip.TryGetProperty("squadWipe",out var w)&&w.GetBoolean();
+            }
+            AddClip(SavedClip.FromFile(new FileInfo(path),seconds,wipe));
             if(!model.Running)model.StatusTitle="已停止";
         }
         else if(type=="audio_status")
