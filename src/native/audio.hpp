@@ -1,6 +1,7 @@
 #pragma once
 #include "media.hpp"
 #include "mic_denoiser.hpp"
+#include "speech_leveler.hpp"
 #include <audioclient.h>
 #include <audioclientactivationparams.h>
 #include <mmdeviceapi.h>
@@ -10,37 +11,6 @@
 #include <ksmedia.h>
 #include <array>
 namespace apex {
-struct Biquad {
-    double b0,b1,b2,a1,a2,z1=0,z2=0;
-    double process(double x){double y=b0*x+z1;z1=b1*x-a1*y+z2;z2=b2*x-a2*y;return y;}
-};
-class LoudnessGain {
-    std::array<Biquad,2> shelf_{Biquad{1.53512485958697,-2.69169618940638,1.19839281085285,-1.69065929318241,.73248077421585},
-        Biquad{1.53512485958697,-2.69169618940638,1.19839281085285,-1.69065929318241,.73248077421585}};
-    std::array<Biquad,2> pass_{Biquad{1,-2,1,-1.99004745483398,.99007225036621},Biquad{1,-2,1,-1.99004745483398,.99007225036621}};
-    double energy_=1e-9,gainDb_=0,limiter_=1;
-public:
-    float process(float* left,float* right,int n,double balance,bool enabled) {
-        double e=0;
-        for(int i=0;i<n;++i){double l=pass_[0].process(shelf_[0].process(left[i]));double r=pass_[1].process(shelf_[1].process(right[i]));e+=l*l+r*r;}
-        e/=std::max(1,n);double smoothing=std::exp(-double(n)/(48000*.4));energy_=energy_*smoothing+e*(1-smoothing);
-        double loudness=-.691+10*std::log10(std::max(energy_,1e-12));
-        double target=gainDb_;
-        if(enabled && loudness>-50)target=std::clamp(-20-loudness,-18.0,12.0);
-        if(!enabled)target=0;
-        double slew=double(n)/48000;gainDb_+=std::clamp(target-gainDb_,-slew,slew);
-        double gain=std::pow(10,(gainDb_+balance)/20),peak=0;
-        constexpr double ceiling=.891250938;
-        for(int i=0;i<n;++i){
-            double l=left[i]*gain,r=right[i]*gain;
-            double wanted=std::min(1.0,ceiling/std::max({std::abs(l),std::abs(r),1e-9}));
-            limiter_=wanted<limiter_?wanted:limiter_+(wanted-limiter_)*(1-std::exp(-1/(48000*.1)));
-            left[i]=static_cast<float>(std::clamp(l*limiter_,-ceiling,ceiling));right[i]=static_cast<float>(std::clamp(r*limiter_,-ceiling,ceiling));
-            peak=std::max({peak,std::abs(double(left[i])),std::abs(double(right[i]))});
-        }
-        return static_cast<float>(peak);
-    }
-};
 class ActivationHandler:public Microsoft::WRL::RuntimeClass<Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
     IActivateAudioInterfaceCompletionHandler,Microsoft::WRL::FtmBase> {
 public:
@@ -82,7 +52,7 @@ public:
 class AudioCapture {
     int stream_;DWORD pid_;std::string mic_;double epoch_;
     std::atomic<std::shared_ptr<std::string>> requestedMic_;
-    AudioEncoder encoder_;LoudnessGain gain_;MicDenoiser denoiser_;std::atomic<bool> noiseSuppression_=true;
+    AudioEncoder encoder_;SpeechLeveler leveler_;MicDenoiser denoiser_;std::atomic<bool> noiseSuppression_=true;
     std::function<double()> balance_;std::function<void(json)> notify_;
     std::jthread thread_;AudioPeakMeter meter_;std::atomic<bool> healthy_=false;
     winrt::com_ptr<IAudioClient> client_;winrt::com_ptr<IAudioCaptureClient> capture_;
@@ -91,7 +61,7 @@ class AudioCapture {
     void cleanup() {
         if(client_)client_->Stop();capture_=nullptr;client_=nullptr;
         swr_free(&resampler_);if(format_)CoTaskMemFree(format_);format_=nullptr;healthy_=false;meter_.reset();
-        denoiser_.reset();
+        denoiser_.reset();leveler_.reset();
     }
     void initialize() {
         cleanup();
@@ -122,16 +92,26 @@ class AudioCapture {
         int64_t target=std::max<int64_t>(0,static_cast<int64_t>(std::llround(time*48000)));
         while(expectedPts_+480<=target){std::array<float,480> zero{};encoder_.append(zero.data(),zero.data(),480,expectedPts_);expectedPts_+=480;}
     }
+    void write(float* left,float* right,int count,int64_t pts){
+        float peak=0;for(int i=0;i<count;++i)peak=std::max({peak,std::abs(left[i]),std::abs(right[i])});meter_.add(peak);
+        encoder_.append(left,right,count,pts);expectedPts_=std::max(expectedPts_,pts+count);
+    }
+    // The microphone and the other-desktop track are balanced on their measured speaking level; the game track
+    // is only peak limited. The leveler keeps the timestamps but holds about 0.3 s of audio.
     void encode(float* left,float* right,int count,int64_t pts){
         double bal=stream_==2?balance_()/2:stream_==3?-balance_()/2:0;
-        meter_.add(gain_.process(left,right,count,bal,stream_!=1));
-        encoder_.append(left,right,count,pts);expectedPts_=std::max(expectedPts_,pts+count);
+        leveler_.process(left,right,count,pts,bal,stream_!=1,[this](float* l,float* r,int n,int64_t t){write(l,r,n,t);});
+    }
+    void drainProcessing(){
+        if(stream_==2)denoiser_.flush([this](auto l,auto r,int n,int64_t t){encode(l,r,n,t);});
+        leveler_.flush([this](float* l,float* r,int n,int64_t t){write(l,r,n,t);});
     }
     void run(std::stop_token stop) {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
         double retryAt=0,lastData=qpcSeconds(),lastWarning=0;
         while(!stop.stop_requested()){
-            if(stream_==2){auto requested=requestedMic_.load();if(requested && *requested!=mic_){mic_=*requested;cleanup();retryAt=0;}}
+            if(stream_==2){auto requested=requestedMic_.load();if(requested && *requested!=mic_){
+                try{drainProcessing();}catch(...){}mic_=*requested;cleanup();leveler_.restartLearning();retryAt=0;}}
             if(!client_){
                 if(qpcSeconds()>=retryAt){
                     try{initialize();notify_({{"type","audio_status"},{"track",stream_},{"healthy",true}});lastData=qpcSeconds();}
@@ -162,11 +142,11 @@ class AudioCapture {
                     winrt::check_hresult(capture_->GetNextPacketSize(&available));
                 }
                 // Process loopback may omit silent packets; generate silence on the same clock.
-                if(qpcSeconds()-lastData>.1){if(stream_==2)denoiser_.flush([this](auto l,auto r,int n,int64_t t){encode(l,r,n,t);});silenceUntil(qpcSeconds()-epoch_-.05);}
-            }catch(...){std::string error=errorText();cleanup();retryAt=qpcSeconds()+2;notify_({{"type","audio_status"},{"track",stream_},{"healthy",false},{"message",error}});}
+                if(qpcSeconds()-lastData>.1){drainProcessing();silenceUntil(qpcSeconds()-epoch_-.05);}
+            }catch(...){std::string error=errorText();try{drainProcessing();}catch(...){}cleanup();retryAt=qpcSeconds()+2;notify_({{"type","audio_status"},{"track",stream_},{"healthy",false},{"message",error}});}
             std::this_thread::sleep_for(5ms);
         }
-        try{if(stream_==2)denoiser_.flush([this](auto l,auto r,int n,int64_t t){encode(l,r,n,t);});encoder_.finish();}catch(...){notify_({{"type","warning"},{"message",errorText()}});}cleanup();
+        try{drainProcessing();encoder_.finish();}catch(...){notify_({{"type","warning"},{"message",errorText()}});}cleanup();
     }
 public:
     AudioCapture(int stream,DWORD pid,std::string mic,double epoch,std::function<void(PacketRef)> sink,
@@ -178,6 +158,7 @@ public:
     void microphone(std::string id){if(stream_==2)requestedMic_.store(std::make_shared<std::string>(std::move(id)));}
     void noiseSuppression(bool enabled){if(stream_==2)noiseSuppression_=enabled;}
     float level(){return meter_.take();}bool healthy()const{return healthy_;}
+    SpeechLeveler::Status speech(){return leveler_.take();}
     AVCodecParameters* parameters()const{return encoder_.parameters();}
     AVRational timebase()const{return encoder_.timebase();}
 };

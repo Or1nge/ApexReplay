@@ -330,6 +330,9 @@ public partial class MainWindow : Window
         {
             model.ApplyAudioLevels(message.GetProperty("levels").EnumerateArray().Select(x=>x.GetDouble()).ToArray(),
                 message.GetProperty("audioHealthy").EnumerateArray().Select(x=>x.GetBoolean()).ToArray());
+            if(message.TryGetProperty("speech",out var speech)&&speech.ValueKind==JsonValueKind.Array)
+                model.ApplySpeech(speech.EnumerateArray().Select(x=>new ViewModel.SpeechState(x.GetProperty("active").GetBoolean(),x.GetProperty("learned").GetBoolean(),
+                    x.GetProperty("level").GetDouble(),x.GetProperty("gain").GetDouble())).ToArray(),DateTime.UtcNow);
         }
         else if(type=="saved")
         {

@@ -22,6 +22,10 @@ try {
         if($LASTEXITCODE -ne 0){throw 'Rule tests compilation failed.'}
         & (Join-Path $taskBuild 'rules_tests.exe')
         if($LASTEXITCODE -ne 0){throw 'Rule scenario tests failed.'}
+        & cl.exe /nologo /std:c++20 /EHsc /O2 /utf-8 /MD (Join-Path $taskRoot 'tests\speech_tests.cpp') ('/Fe:'+(Join-Path $taskBuild 'speech_tests.exe'))
+        if($LASTEXITCODE -ne 0){throw 'Speech leveling tests compilation failed.'}
+        & (Join-Path $taskBuild 'speech_tests.exe')
+        if($LASTEXITCODE -ne 0){throw 'Speech leveling tests failed.'}
         & cl.exe @taskCommon (Join-Path $taskRoot 'tests\native_tests.cpp') ('/Fe:'+(Join-Path $taskBuild 'native_tests.exe')) /link ('/LIBPATH:'+(Join-Path $taskFf 'lib')) avcodec.lib avformat.lib avutil.lib avfilter.lib swresample.lib swscale.lib windowsapp.lib ole32.lib uuid.lib
         if($LASTEXITCODE -ne 0){throw 'Native scenario tests compilation failed.'}
         $env:PATH=(Join-Path $taskFf 'bin')+';'+$env:PATH

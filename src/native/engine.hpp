@@ -54,7 +54,19 @@ class CaptureSession {
             <<L"_"<<(job.clip.kind=="multikill"?L"长镜头":job.clip.kind=="burst"?L"高伤害":L"测试")<<L"_"<<job.clip.kills<<L"_"<<GetCurrentProcessId()<<L"_"<<exportId_++<<L".mp4";
         job.file=directory/name.str();exports_.push(std::move(job));
     }
-    void drain(RuleEngine& rules){for(auto& clip:rules.takeReady())publishClip(std::move(clip));ring_.pin(rules.earliestNeeded());}
+    // Speech leveling delays the audio tracks by about 0.3 s, so a finished clip waits (at most 1.5 s) until all
+    // three tracks have reached its end. Only the analysis thread touches the waiting list.
+    std::vector<std::pair<ClipPlan,double>> waiting_;
+    void drain(RuleEngine& rules,bool final=false){
+        double now=qpcSeconds(),audio=ring_.latestAudio();
+        for(auto& clip:rules.takeReady())waiting_.push_back({std::move(clip),now});
+        std::optional<double> needed=rules.earliestNeeded();
+        for(auto it=waiting_.begin();it!=waiting_.end();){
+            if(final||it->first.end<=audio||now-it->second>1.5){publishClip(std::move(it->first));it=waiting_.erase(it);}
+            else{needed=std::min(needed.value_or(it->first.start),it->first.start);++it;}
+        }
+        ring_.pin(needed);
+    }
     void analyze(std::stop_token stop){
         winrt::init_apartment(winrt::apartment_type::multi_threaded);ObservationRules flow(baseRules_);auto& rules=flow.rules();
         try{
@@ -71,7 +83,7 @@ class CaptureSession {
                 for(const auto& correction:observation.resultCorrections)notify_({{"type","result_correction"},{"target",correction.first},{"kind","assist"}});
                 drain(rules);pending_=rules.pending();analysisMs_=(qpcSeconds()-begin)*1000;
             }
-            rules.boundary(ring_.latest());drain(rules);pending_=false;
+            rules.boundary(ring_.latest());drain(rules,true);pending_=false;
         }catch(...){failed_=true;notify_({{"type","fatal"},{"message",errorText()}});}
     }
     void record(std::stop_token stop) {
@@ -100,8 +112,10 @@ class CaptureSession {
                 }else if(!minimized&&qpcSeconds()-lastNewFrame>5){throw std::runtime_error("Apex 窗口未提供画面，请使用无边框窗口模式并检查采集权限");}
                 if(minimized&&time-lastAnalysis>=1){AnalysisFrame input{{},time,false,false};{std::lock_guard lock(analysisMutex_);analysisFrame_=std::move(input);}analysisCv_.notify_one();lastAnalysis=time;}
                 if(time-lastAudio>=.1){
-                    json levels=json::array(),health=json::array();for(auto& a:audio_){levels.push_back(a->level());health.push_back(a->healthy());}
-                    notify_({{"type","audio_levels"},{"levels",levels},{"audioHealthy",health}});lastAudio=time;
+                    json levels=json::array(),health=json::array(),speech=json::array();
+                    for(auto& a:audio_){levels.push_back(a->level());health.push_back(a->healthy());
+                        auto s=a->speech();speech.push_back({{"active",s.speech},{"learned",s.learned},{"level",s.levelDb},{"gain",s.gainDb}});}
+                    notify_({{"type","audio_levels"},{"levels",levels},{"audioHealthy",health},{"speech",speech}});lastAudio=time;
                 }
                 if(time-lastStatus>=1){
                     std::string detection;{std::lock_guard lock(statusMutex_);detection=detectionStatus_;}

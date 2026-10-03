@@ -14,7 +14,7 @@ using PacketRef=std::shared_ptr<Packet>;
 class PacketRing {
     mutable std::mutex mutex_;std::deque<PacketRef> packets_;uint64_t bytes_=0;
     double latest_=0,latestVideo_=0,videoSegmentStart_=0,maxSeconds_=1800,pinStart_=-1,lastBudgetRefresh_=-100;bool hasKey_=false;
-    double memoryPercent_=60;uint64_t budget_=8ull<<30,idleBytes_=0;
+    double memoryPercent_=60;uint64_t budget_=8ull<<30,idleBytes_=0;std::array<double,4> latestStream_{};
     std::deque<double> keys_;
     void dropBefore(double time) {
         while(!packets_.empty()&&packets_.front()->time<time){bytes_-=packets_.front()->data->size;packets_.pop_front();}
@@ -31,7 +31,8 @@ public:
         if(qpcSeconds()-lastBudgetRefresh_>=2)refreshBudget();
         if(p->stream==0 && (p->data->flags&AV_PKT_FLAG_KEY)){hasKey_=true;keys_.push_back(p->time);}
         if(!hasKey_)return;
-        latest_=std::max(latest_,p->time);bytes_+=p->data->size;packets_.push_back(std::move(p));
+        latest_=std::max(latest_,p->time);if(p->stream>=0&&p->stream<4)latestStream_[p->stream]=std::max(latestStream_[p->stream],p->time);
+        bytes_+=p->data->size;packets_.push_back(std::move(p));
         if(packets_.back()->stream==0){if(packets_.back()->time-latestVideo_>.5)videoSegmentStart_=packets_.back()->time;latestVideo_=std::max(latestVideo_,packets_.back()->time);}
         double target=latest_-maxSeconds_;if(pinStart_>=0)target=std::min(target,pinStart_);
         while(keys_.size()>1&&keys_[1]<=target)dropBefore(keys_[1]);
@@ -56,6 +57,8 @@ public:
     double duration()const{std::lock_guard lock(mutex_);return packets_.empty()?0:latest_-packets_.front()->time;}
     double latest()const{std::lock_guard lock(mutex_);return latest_;}
     double latestVideo()const{std::lock_guard lock(mutex_);return latestVideo_;}
+    // Newest timestamp that all three audio tracks have reached.
+    double latestAudio()const{std::lock_guard lock(mutex_);return std::min({latestStream_[1],latestStream_[2],latestStream_[3]});}
     double videoSegmentStart()const{std::lock_guard lock(mutex_);return videoSegmentStart_;}
     uint64_t budget()const{std::lock_guard lock(mutex_);return budget_;}
     uint64_t idleBytes()const{std::lock_guard lock(mutex_);return idleBytes_;}

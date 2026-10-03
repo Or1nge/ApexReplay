@@ -47,8 +47,13 @@ int main(){av_log_set_level(AV_LOG_ERROR);int passed=0;auto test=[&](const char*
             ring.pin({});ring.push(sample(101,true));require(ring.duration()<=61,"released candidate kept growing cache");});
         test("AAC fills multi second device clock gaps",[]{std::vector<PacketRef> packets;AudioEncoder encoder(1,[&](PacketRef p){packets.push_back(std::move(p));});std::array<float,480> audio{};
             encoder.append(audio.data(),audio.data(),480,0);encoder.append(audio.data(),audio.data(),480,96000);encoder.finish();require(packets.size()>90&&packets.back()->time>1.98,"audio timeline collapsed after device interruption");});
-        test("speech limiter bounds peaks and noise does not grow",[]{LoudnessGain gain;std::array<float,480> left{},right{};left.fill(2);right.fill(2);gain.process(left.data(),right.data(),480,12,true);
-            for(auto x:left)require(std::abs(x)<=.892,"limiter peak escaped");LoudnessGain quiet;double max=0;for(int n=0;n<2000;++n){left.fill(1e-5f);right.fill(1e-5f);quiet.process(left.data(),right.data(),480,0,true);max=std::max(max,double(left[0]));}require(max<1.01e-5,"silence gate raised noise");});
+        test("speech leveler bounds peaks, keeps timestamps and does not raise steady low noise",[]{SpeechLeveler hot;std::array<float,480> left{},right{};std::vector<float> out;int64_t next=0;
+            auto sink=[&](float* l,float*,int n,int64_t pts){require(pts==next,"leveler broke sample timestamps");next+=n;out.insert(out.end(),l,l+n);};
+            for(int n=0;n<40;++n){left.fill(2);right.fill(2);hot.process(left.data(),right.data(),480,n*480,12,true,sink);}hot.flush(sink);
+            require(out.size()==40*480,"leveler lost samples");for(auto x:out)require(std::abs(x)<=.892,"limiter peak escaped");
+            SpeechLeveler quiet;double max=0;for(int n=0;n<2000;++n){left.fill(1e-5f);right.fill(1e-5f);
+                quiet.process(left.data(),right.data(),480,n*480,0,true,[&](float* l,float*,int k,int64_t){for(int i=0;i<k;++i)max=std::max(max,double(std::abs(l[i])));});}
+            require(max<1.01e-5,"leveler raised steady low noise");require(!quiet.take().learned,"steady noise taught a speaking level");});
         require(Packet::liveBytes==0,"encoded packet references leaked");std::cout<<passed<<" native scenarios passed\n";return 0;
     }catch(...){std::cerr<<errorText()<<'\n';return 1;}
 }

@@ -23,7 +23,8 @@ public sealed class ViewModel : INotifyPropertyChanged
     private double burstSeconds=5,burstDamage=250,fastBurstSeconds=2,fastBurstDamage=150;
     private string videoResolution="source",videoCodec="hevc",videoPreset="p6",theme="auto";
     private bool ready,running,retry,startWithWindows,micNoiseSuppression=true;
-    private string gameAudioStatus="未采集",micAudioStatus="未采集",desktopAudioStatus="未采集";
+    private string gameAudioStatus="未采集",micAudioStatus="未采集",desktopAudioStatus="未采集",micVoice="",desktopVoice="";
+    private readonly DateTime[] lastSpeech=new DateTime[3];
     private System.Windows.Media.Brush statusBrush=new SolidColorBrush(System.Windows.Media.Color.FromRgb(115,131,153));
     public string OutputDirectory { get=>output;set{if(Set(ref output,value)){Changed(nameof(OutputDisplay));SettingsChanged?.Invoke();}} }
     public string OutputDisplay => string.IsNullOrWhiteSpace(output)?"未选择":output;
@@ -73,10 +74,27 @@ public sealed class ViewModel : INotifyPropertyChanged
     public string GameAudioStatus {get=>gameAudioStatus;private set=>Set(ref gameAudioStatus,value);}
     public string MicAudioStatus {get=>micAudioStatus;private set=>Set(ref micAudioStatus,value);}
     public string DesktopAudioStatus {get=>desktopAudioStatus;private set=>Set(ref desktopAudioStatus,value);}
+    // Speech balancing of the microphone and other-apps tracks: measured speaking level and applied gain.
+    public string MicVoice {get=>micVoice;private set=>Set(ref micVoice,value);}
+    public string DesktopVoice {get=>desktopVoice;private set=>Set(ref desktopVoice,value);}
     public void ResetAudio(string status)
     {
         GameLevel=MicLevel=DesktopLevel=0;
         GameAudioStatus=MicAudioStatus=DesktopAudioStatus=status;
+        MicVoice=DesktopVoice="";Array.Clear(lastSpeech);
+    }
+    public record SpeechState(bool Active,bool Learned,double Level,double Gain);
+    public void ApplySpeech(SpeechState[] speech,DateTime now)
+    {
+        if(speech.Length!=3)return;
+        string Display(int i)
+        {
+            var s=speech[i];if(s.Active)lastSpeech[i]=now;
+            bool talking=now-lastSpeech[i]<TimeSpan.FromSeconds(.6);
+            if(!s.Learned||!double.IsFinite(s.Level)||!double.IsFinite(s.Gain))return talking?"检测到人声 · 正在测量说话音量":"等待人声";
+            return $"{(talking?"说话中":"人声")} {s.Level:0} dB · 平衡 {s.Gain:+0.0;-0.0;0.0} dB";
+        }
+        MicVoice=Display(1);DesktopVoice=Display(2);
     }
     public void ApplyAudioLevels(double[] peaks,bool[] healthy)
     {

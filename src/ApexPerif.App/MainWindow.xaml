@@ -293,9 +293,11 @@
          <DockPanel><TextBlock DockPanel.Dock="Right" Text="{Binding GameAudioStatus}" Style="{StaticResource Subtle}" FontSize="11.5"/><TextBlock Text="Apex"/></DockPanel>
          <ProgressBar Value="{Binding GameLevel}" Style="{StaticResource AudioMeter}" Margin="0,7,0,14"/>
          <DockPanel><TextBlock DockPanel.Dock="Right" Text="{Binding MicAudioStatus}" Style="{StaticResource Subtle}" FontSize="11.5"/><TextBlock Text="麦克风"/></DockPanel>
-         <ProgressBar Value="{Binding MicLevel}" Style="{StaticResource AudioMeter}" Margin="0,7,0,14"/>
+         <ProgressBar Value="{Binding MicLevel}" Style="{StaticResource AudioMeter}" Margin="0,7,0,0"/>
+         <TextBlock Text="{Binding MicVoice}" Style="{StaticResource Subtle}" FontSize="11" Margin="0,5,0,12" ToolTip="识别出的人声音量与当前平衡增益"/>
          <DockPanel><TextBlock DockPanel.Dock="Right" Text="{Binding DesktopAudioStatus}" Style="{StaticResource Subtle}" FontSize="11.5"/><TextBlock Text="其他应用"/></DockPanel>
          <ProgressBar Value="{Binding DesktopLevel}" Style="{StaticResource AudioMeter}" Margin="0,7,0,0"/>
+         <TextBlock Text="{Binding DesktopVoice}" Style="{StaticResource Subtle}" FontSize="11" Margin="0,5,0,0" ToolTip="识别出的人声音量与当前平衡增益；提示音不计入"/>
         </StackPanel>
        </Border>
        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="18,14,14,14">
@@ -417,7 +419,11 @@
         <Grid Style="{StaticResource Row}"><TextBlock Text="麦克风降噪" VerticalAlignment="Center" ToolTip="抑制风扇、空调等持续噪声"/>
          <CheckBox HorizontalAlignment="Right" VerticalAlignment="Center" IsChecked="{Binding MicNoiseSuppression, UpdateSourceTrigger=PropertyChanged}"/></Grid>
         <Border Style="{StaticResource Rule}"/>
-        <Grid Style="{StaticResource Row}"><TextBlock Text="音量平衡" VerticalAlignment="Center"/>
+        <Grid Style="{StaticResource Row}"><TextBlock Text="自动人声平衡" VerticalAlignment="Center"
+          ToolTip="持续识别麦克风和其他应用里的人声，测量正常说话音量并调到相同响度；提示音、噪声和静音不放大"/>
+         <TextBlock Text="麦克风 · 其他应用" Style="{StaticResource Muted}" HorizontalAlignment="Right" VerticalAlignment="Center"/></Grid>
+        <Border Style="{StaticResource Rule}"/>
+        <Grid Style="{StaticResource Row}"><TextBlock Text="音量平衡" VerticalAlignment="Center" ToolTip="在自动平衡之后，让麦克风或其他应用更响"/>
          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <TextBlock Text="其他声音" Style="{StaticResource Muted}" Margin="0,0,10,0"/>
           <Slider Width="160" Style="{StaticResource CenterSlider}" Minimum="-12" Maximum="12" Value="{Binding Balance, UpdateSourceTrigger=PropertyChanged}"/>
