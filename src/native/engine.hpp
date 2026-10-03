@@ -40,7 +40,7 @@ class CaptureSession {
     std::optional<AnalysisFrame> analysisFrame_;
     std::atomic<bool> pending_=false,failed_=false;std::atomic<unsigned> skippedAnalysis_=0,videoFrames_=0,repeatedFrames_=0;
     std::atomic<double> analysisMs_=0;std::atomic<unsigned> exportId_=0;
-    std::string detectionStatus_="等待 Apex 战斗 HUD";std::mutex statusMutex_;
+    std::string detectionStatus_="等待战斗画面";std::mutex statusMutex_;
     void publishClip(ClipPlan clip) {
         ExportJob job;job.clip=std::move(clip);job.codecs=codecs_;
         if(job.clip.end>ring_.latestVideo()+1./60){job.clip.end=ring_.latestVideo()+1./60;job.clip.truncated=true;}

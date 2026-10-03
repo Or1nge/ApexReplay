@@ -121,7 +121,7 @@ public:
         // Damage digits and enemy bars can be hidden independently of the player's HUD.
         // The weapon/ammo HUD and battle layout establish context; result prompts remain usable.
         obs.active=obs.ammo.has_value()&&battleLayout&&!excluded;
-        obs.status=excluded?"非本人战斗画面":obs.active?(obs.totalDamage?"中文 HUD 已匹配":"战斗 HUD 已匹配 · 伤害计数暂不可读，继续识别结果提示"):"等待可识别的 Apex 战斗 HUD";
+        obs.status=excluded?"非本人战斗画面":obs.active?(obs.totalDamage?"HUD 已识别":"HUD 已识别 · 伤害数字不可读"):"等待战斗画面";
         if(!obs.totalDamage){damage_.reset();pendingDamage_.reset();lowerDamage_.reset();baselineHits_=resetHits_=0;}
         if(obs.active){
             if(time-nameReadAt_>=.5){attribution_.observeName(ocr_.read(images[6]));nameReadAt_=time;}
