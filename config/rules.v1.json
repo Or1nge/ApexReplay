@@ -1,0 +1,17 @@
+{
+  "version": "apex-zh-v2-long-only",
+  "burstDamage": 150,
+  "burstSeconds": 3.0,
+  "fastBurstDamage": 100,
+  "fastBurstSeconds": 1.5,
+  "resultGraceSeconds": 2.0,
+  "fastMergeSeconds": 12.0,
+  "bridgeMergeSeconds": 20.0,
+  "bridgeDamage": 60,
+  "bridgeDamageSeconds": 3.0,
+  "bridgeQuietSeconds": 6.0,
+  "maxClipSeconds": 90.0,
+  "splitOverlapSeconds": 2.0,
+  "longPre": 10.0,
+  "longPost": 5.0
+}

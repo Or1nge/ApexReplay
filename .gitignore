@@ -1,0 +1,28 @@
+.tools/
+build/
+dist/
+artifacts/
+**/bin/
+**/obj/
+*.user
+*.pdb
+*.obj
+*.log
+
+# Other applications and machine-specific files share this local workspace.
+apps/
+catalog/
+packaging/
+releases/
+tools/
+docs/APP_INVENTORY.md
+scripts/Package-DSEButtonMapper.ps1
+
+# Local credentials and editor settings.
+.env
+.env.*
+*.pem
+*.key
+.vs/
+.idea/
+
