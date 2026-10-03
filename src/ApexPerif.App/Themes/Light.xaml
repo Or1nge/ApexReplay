@@ -1,0 +1,22 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <!-- Light palette; swapped at runtime by Themes.Apply. -->
+ <SolidColorBrush x:Key="WindowBrush" Color="#F3F5F8"/>
+ <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF"/>
+ <SolidColorBrush x:Key="ControlBrush" Color="#F1F3F6"/>
+ <SolidColorBrush x:Key="ControlHoverBrush" Color="#E8EBF0"/>
+ <SolidColorBrush x:Key="PopupBrush" Color="#FFFFFF"/>
+ <SolidColorBrush x:Key="LineBrush" Color="#E2E6EC"/>
+ <SolidColorBrush x:Key="LineHoverBrush" Color="#CDD3DC"/>
+ <SolidColorBrush x:Key="TextBrush" Color="#151A22"/>
+ <SolidColorBrush x:Key="MutedBrush" Color="#5C6778"/>
+ <SolidColorBrush x:Key="SubtleBrush" Color="#8A94A3"/>
+ <SolidColorBrush x:Key="Accent" Color="#E5383F"/>
+ <SolidColorBrush x:Key="GoodBrush" Color="#1FAF6B"/>
+ <SolidColorBrush x:Key="WarnBrush" Color="#B86E00"/>
+ <SolidColorBrush x:Key="WarnSoftBrush" Color="#FFF4E0"/>
+ <SolidColorBrush x:Key="WarnLineBrush" Color="#F2D49B"/>
+ <SolidColorBrush x:Key="OverlayBrush" Color="#000000"/>
+ <SolidColorBrush x:Key="ThumbBrush" Color="#FFFFFF"/>
+ <SolidColorBrush x:Key="ThumbLineBrush" Color="#C5CCD6"/>
+</ResourceDictionary>

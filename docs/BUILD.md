@@ -43,6 +43,8 @@ PowerShell 7 中运行：
 ./dist/Apex回放/Apex回放.exe --ui-smoke "$PWD/artifacts/ui.png"
 ```
 
+`--ui-smoke` 输出深色 `ui.png`、`ui.settings.png` 和浅色 `ui.light.png`、`ui.light.settings.png`。
+
 采集测试会显示独立测试窗口，采集默认麦克风，并播放很轻的测试音。使用一个新的目录，以保留旧测试结果并避免覆盖文件。进程音轨排除测试可从另一个 PowerShell 进程启动 `--test-audio 880 12`，再运行 `--selftest`，两个音源应分属第一、第三轨。
 
 `scripts/build-hud-templates.py` 是字形模板的校准记录，需要本机 `artifacts` 内对应的人工标注裁剪图和 Python 的 Pillow/numpy；普通运行和构建不依赖 Python。

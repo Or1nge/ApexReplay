@@ -19,7 +19,7 @@ public sealed class ViewModel : INotifyPropertyChanged
     private double sp=5,so=3,lp=10,lo=5,balance=0,gameLevel,micLevel,desktopLevel;
     private double replayMinutes=30,memoryPercent=60;
     private double videoBitrateMbps=60;
-    private string videoResolution="source",videoCodec="hevc",videoPreset="p6";
+    private string videoResolution="source",videoCodec="hevc",videoPreset="p6",theme="auto";
     private bool ready,running,retry,micNoiseSuppression=true;
     private string gameAudioStatus="未采集",micAudioStatus="未采集",desktopAudioStatus="未采集";
     private System.Windows.Media.Brush statusBrush=new SolidColorBrush(System.Windows.Media.Color.FromRgb(115,131,153));
@@ -35,6 +35,8 @@ public sealed class ViewModel : INotifyPropertyChanged
     /// <summary>Actual capture size reported by the worker; shown instead of "游戏分辨率" while capturing.</summary>
     public string? CaptureSize {get=>captureSize;set{if(Set(ref captureSize,value))Changed(nameof(VideoSummary));}}
     public bool VideoSettingsEnabled=>!Running;
+    /// <summary>"auto" (by local time), "light" or "dark".</summary>
+    public string Theme {get=>theme;set{if(Set(ref theme,value is "light" or "dark"?value:"auto"))SettingsChanged?.Invoke();}}
     public IReadOnlyList<VideoOption> VideoResolutions {get;}=[new("source","跟随游戏"),new("1080p","1080p · 1920 × 1080"),new("1440p","1440p · 2560 × 1440"),new("2160p","4K · 3840 × 2160")];
     public IReadOnlyList<VideoOption> VideoCodecs {get;}=[new("hevc","HEVC / H.265"),new("h264","H.264")];
     public IReadOnlyList<VideoOption> VideoPresets {get;}=[new("p4","性能优先"),new("p5","均衡"),new("p6","画质优先")];
@@ -94,7 +96,7 @@ public sealed class ViewModel : INotifyPropertyChanged
     public bool Retry {get=>retry;set{if(Set(ref retry,value))Changed(nameof(RetryVisibility));}}
     public System.Windows.Visibility RetryVisibility=>retry?System.Windows.Visibility.Visible:System.Windows.Visibility.Collapsed;
     public ObservableCollection<Microphone> Microphones {get;}=[new("","默认通信设备")];
-    public object Settings()=>new {outputDirectory=OutputDirectory,microphoneId=MicrophoneId,micNoiseSuppression=MicNoiseSuppression,videoResolution=VideoResolution,videoCodec=VideoCodec,videoBitrateMbps=VideoBitrateMbps,videoPreset=VideoPreset,shortPre=ShortPre,shortPost=ShortPost,longPre=LongPre,longPost=LongPost,balance=Balance,controllerFire="LB",replayMinutes=ReplayMinutes,memoryPercent=MemoryPercent};
+    public object Settings()=>new {outputDirectory=OutputDirectory,microphoneId=MicrophoneId,micNoiseSuppression=MicNoiseSuppression,videoResolution=VideoResolution,videoCodec=VideoCodec,videoBitrateMbps=VideoBitrateMbps,videoPreset=VideoPreset,shortPre=ShortPre,shortPost=ShortPost,longPre=LongPre,longPost=LongPost,balance=Balance,controllerFire="LB",replayMinutes=ReplayMinutes,memoryPercent=MemoryPercent,theme=Theme};
     public void Load(JsonElement s)
     {
         if(s.TryGetProperty("outputDirectory",out var o))OutputDirectory=o.GetString()??"";
@@ -111,5 +113,6 @@ public sealed class ViewModel : INotifyPropertyChanged
         if(s.TryGetProperty("balance",out var e))Balance=e.GetDouble();
         if(s.TryGetProperty("replayMinutes",out var f))ReplayMinutes=f.GetDouble();
         if(s.TryGetProperty("memoryPercent",out var g))MemoryPercent=g.GetDouble();
+        if(s.TryGetProperty("theme",out var t))Theme=t.GetString()??"auto";
     }
 }

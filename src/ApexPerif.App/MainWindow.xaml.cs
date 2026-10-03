@@ -20,6 +20,7 @@ public partial class MainWindow : Window
     private string? restoredMicrophoneId;
     private readonly Dictionary<int,string> audioErrors=new();
     private readonly DispatcherTimer changes=new(){Interval=TimeSpan.FromMilliseconds(350)};
+    private readonly DispatcherTimer themeClock=new(){Interval=TimeSpan.FromMinutes(1)};
     private readonly string settingsPath=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ApexPerif","settings.json");
     private static readonly SolidColorBrush GoodBrush=Frozen(61,214,140),BusyBrush=Frozen(91,155,255),IdleBrush=Frozen(107,119,137),WarnBrush=Frozen(245,165,36);
     private static SolidColorBrush Frozen(byte r,byte g,byte b){var brush=new SolidColorBrush(System.Windows.Media.Color.FromRgb(r,g,b));brush.Freeze();return brush;}
@@ -29,12 +30,17 @@ public partial class MainWindow : Window
         var args=Environment.GetCommandLineArgs();
         if(args.Length==5&&args[1]=="--settings-smoke")settingsPath=Path.GetFullPath(args[2]);
         InitializeComponent();DataContext=model;
-        SourceInitialized+=(_,_)=>
+        // Settings are read before the window appears so the saved appearance shows without a flash.
+        bool integration=args.Length>=3&&args[1]=="--integration-smoke",uiSmoke=args.Length>=3&&args[1]=="--ui-smoke";
+        try
         {
-            var handle=new WindowInteropHelper(this).Handle;
-            var enabled=1;DwmSetWindowAttribute(handle,20,ref enabled,sizeof(int));
-            var caption=0x16100D;DwmSetWindowAttribute(handle,35,ref caption,sizeof(int)); // Windows 11: title bar matches the window background
-        };
+            if(!integration&&!uiSmoke&&File.Exists(settingsPath)){using var settings=JsonDocument.Parse(File.ReadAllText(settingsPath));model.Load(settings.RootElement);restoredMicrophoneId=settings.RootElement.TryGetProperty("microphoneId",out var mic)?mic.GetString():null;}
+        }
+        catch(Exception){model.StatusDetail="设置读取失败，已恢复默认";}
+        ApplyTheme();
+        model.PropertyChanged+=(_,e)=>{if(e.PropertyName==nameof(ViewModel.Theme))ApplyTheme();};
+        themeClock.Tick+=(_,_)=>ApplyTheme();themeClock.Start();
+        SourceInitialized+=(_,_)=>UpdateTitleBar();
         var icon=BitmapDecoder.Create(new Uri("pack://application:,,,/Assets/apex-replay.ico"),BitmapCreateOptions.None,BitmapCacheOption.OnLoad);
         HeaderIcon.Source=icon.Frames.Where(f=>f.PixelWidth<=64).OrderByDescending(f=>f.PixelWidth).FirstOrDefault()??icon.Frames[0];
         model.StatusBrush=IdleBrush;
@@ -54,19 +60,22 @@ public partial class MainWindow : Window
             model.SavedCount=3;model.LastSaved="Apex-20261003-213512.mp4";
             model.ApplyAudioLevels([.12,.04,0],[true,true,true]);
             model.StatusBrush=GoodBrush;
-            await Task.Delay(500);UpdateLayout();
-            var bitmap=new RenderTargetBitmap((int)ActualWidth,(int)ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(this);
-            var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using(var file=File.Create(args[2]))png.Save(file);
-            Descendants<System.Windows.Controls.ScrollViewer>(this).First().ScrollToBottom();await Task.Delay(150);UpdateLayout();
-            bitmap=new RenderTargetBitmap((int)ActualWidth,(int)ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(this);png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));
-            using(var file=File.Create(Path.ChangeExtension(args[2],"settings.png")))png.Save(file);
+            themeClock.Stop();
+            void Snapshot(string path)
+            {
+                var bitmap=new RenderTargetBitmap((int)ActualWidth,(int)ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(this);
+                var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(path);png.Save(file);
+            }
+            // ui.png / ui.settings.png in dark, ui.light.png / ui.light.settings.png in light.
+            var scroll=Descendants<System.Windows.Controls.ScrollViewer>(this).First();
+            foreach(var light in new[]{false,true})
+            {
+                Themes.Apply(light);UpdateTitleBar();scroll.ScrollToTop();await Task.Delay(500);UpdateLayout();
+                var path=light?Path.ChangeExtension(args[2],"light.png"):args[2];Snapshot(path);
+                scroll.ScrollToBottom();await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"settings.png"));
+            }
             exiting=true;System.Windows.Application.Current.Shutdown();return;
         }
-        try
-        {
-            if(!integration&&File.Exists(settingsPath)){using var settings=JsonDocument.Parse(File.ReadAllText(settingsPath));model.Load(settings.RootElement);restoredMicrophoneId=settings.RootElement.TryGetProperty("microphoneId",out var mic)?mic.GetString():null;}
-        }
-        catch(Exception){model.StatusDetail="设置读取失败，已恢复默认";}
         settingsLoaded=!integration;
         if(args.Length==5&&args[1]=="--settings-smoke")
         {
@@ -75,7 +84,7 @@ public partial class MainWindow : Window
             {
                 model.OutputDirectory=expected;model.MicrophoneId="test-microphone";model.MicNoiseSuppression=false;
                 model.ShortPre=7;model.ShortPost=4;model.LongPre=13;model.LongPost=8;model.Balance=-3;model.ReplayMinutes=42;model.MemoryPercent=45;
-                model.VideoResolution="1080p";model.VideoCodec="h264";model.VideoBitrateMbps=75;model.VideoPreset="p4";
+                model.VideoResolution="1080p";model.VideoCodec="h264";model.VideoBitrateMbps=75;model.VideoPreset="p4";model.Theme="light";
             }
             else
             {
@@ -84,7 +93,7 @@ public partial class MainWindow : Window
             }
             bool restored=model.OutputDirectory==expected&&model.MicrophoneId=="test-microphone"&&!model.MicNoiseSuppression&&
                 model.ShortPre==7&&model.ShortPost==4&&model.LongPre==13&&model.LongPost==8&&model.Balance==-3&&model.ReplayMinutes==42&&model.MemoryPercent==45&&
-                model.VideoResolution=="1080p"&&model.VideoCodec=="h264"&&model.VideoBitrateMbps==75&&model.VideoPreset=="p4";
+                model.VideoResolution=="1080p"&&model.VideoCodec=="h264"&&model.VideoBitrateMbps==75&&model.VideoPreset=="p4"&&model.Theme=="light";
             File.WriteAllText(args[4],JsonSerializer.Serialize(new{passed=restored,mode=args[3],settings=model.Settings()}));
             // Exit immediately, before the debounced worker configuration runs.
             exiting=true;changes.Stop();System.Windows.Application.Current.Shutdown();return;
@@ -116,6 +125,15 @@ public partial class MainWindow : Window
         bool clearedMeter=model.GameLevel==0&&model.GameAudioStatus=="未采集";
         File.WriteAllText(output,JsonSerializer.Serialize(new{passed=hidden&&waitingMeter&&audioDisplay&&clearedMeter,appName=Title,workerReady=true,startedState,trayHide=hidden,stopped=true,waitingMeter,audioDisplay,clearedMeter,replayMinutes=model.ReplayMinutes,memoryPercent=model.MemoryPercent}));
         await ExitForTestAsync();
+    }
+    private void ApplyTheme(){if(Themes.Apply(Themes.IsLight(model.Theme,DateTime.Now)))UpdateTitleBar();}
+    private void UpdateTitleBar()
+    {
+        var handle=new WindowInteropHelper(this).Handle;if(handle==IntPtr.Zero)return;
+        bool light=Themes.LightActive;
+        var dark=light?0:1;DwmSetWindowAttribute(handle,20,ref dark,sizeof(int));
+        // Windows 11: title bar matches the window background (COLORREF 0x00BBGGRR).
+        var caption=light?0xF8F5F3:0x16100D;DwmSetWindowAttribute(handle,35,ref caption,sizeof(int));
     }
     private async Task ExitForTestAsync(){exiting=true;changes.Stop();tray?.Dispose();trayIcon?.Dispose();if(client is not null)await client.DisposeAsync();System.Windows.Application.Current.Shutdown();}
     private static IEnumerable<T> Descendants<T>(DependencyObject root)where T:DependencyObject

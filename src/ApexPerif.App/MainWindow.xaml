@@ -1,13 +1,29 @@
 <Window x:Class="ApexPerif.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
- xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:ApexPerif"
  Title="Apex回放" Icon="Assets/apex-replay.ico" Width="680" Height="820" MinWidth="560" MinHeight="600"
- Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource UiFont}" FontSize="13"
+ Background="{DynamicResource WindowBrush}" Foreground="{DynamicResource TextBrush}" FontFamily="{StaticResource UiFont}" FontSize="13"
  TextOptions.TextFormattingMode="Display" UseLayoutRounding="True" WindowStartupLocation="CenterScreen">
  <Window.Resources>
   <BooleanToVisibilityConverter x:Key="Visible"/>
+  <local:EqualsConverter x:Key="Is"/>
+  <!-- Segmented appearance switch in the header -->
+  <Style x:Key="ThemeOption" TargetType="RadioButton">
+   <Setter Property="Foreground" Value="{DynamicResource SubtleBrush}"/>
+   <Setter Property="Cursor" Value="Hand"/>
+   <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
+    <Border x:Name="Body" Width="30" Height="24" CornerRadius="10" Background="Transparent">
+     <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    </Border>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="{DynamicResource TextBrush}"/></Trigger>
+     <Trigger Property="IsChecked" Value="True"><Setter TargetName="Body" Property="Background" Value="{DynamicResource ControlHoverBrush}"/><Setter Property="Foreground" Value="{DynamicResource TextBrush}"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <Style x:Key="Card" TargetType="Border">
-   <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
-   <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>
+   <Setter Property="Background" Value="{DynamicResource SurfaceBrush}"/>
+   <Setter Property="BorderBrush" Value="{DynamicResource LineBrush}"/>
    <Setter Property="BorderThickness" Value="1"/>
    <Setter Property="CornerRadius" Value="14"/>
    <Setter Property="Padding" Value="22,18"/>
@@ -17,28 +33,28 @@
    <Setter Property="FontSize" Value="14"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="VerticalAlignment" Value="Center"/>
   </Style>
   <Style x:Key="CardIcon" TargetType="TextBlock" BasedOn="{StaticResource IconText}">
-   <Setter Property="Foreground" Value="{StaticResource Accent}"/><Setter Property="Margin" Value="0,0,10,0"/>
+   <Setter Property="Foreground" Value="{DynamicResource Accent}"/><Setter Property="Margin" Value="0,0,10,0"/>
   </Style>
   <Style x:Key="Label" TargetType="TextBlock">
-   <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/><Setter Property="VerticalAlignment" Value="Center"/>
+   <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/><Setter Property="VerticalAlignment" Value="Center"/>
   </Style>
   <Style x:Key="Value" TargetType="TextBlock">
    <Setter Property="HorizontalAlignment" Value="Right"/><Setter Property="VerticalAlignment" Value="Center"/>
    <Setter Property="Typography.NumeralAlignment" Value="Tabular"/>
   </Style>
   <Style x:Key="StatLabel" TargetType="TextBlock">
-   <Setter Property="Foreground" Value="{StaticResource SubtleBrush}"/><Setter Property="FontSize" Value="12"/>
+   <Setter Property="Foreground" Value="{DynamicResource SubtleBrush}"/><Setter Property="FontSize" Value="12"/>
   </Style>
   <Style x:Key="StatValue" TargetType="TextBlock">
    <Setter Property="FontFamily" Value="{StaticResource DisplayFont}"/><Setter Property="FontSize" Value="20"/><Setter Property="FontWeight" Value="SemiBold"/>
    <Setter Property="Margin" Value="0,4,0,2"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/>
   </Style>
   <Style x:Key="StatNote" TargetType="TextBlock">
-   <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/><Setter Property="FontSize" Value="11"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+   <Setter Property="Foreground" Value="{DynamicResource MutedBrush}"/><Setter Property="FontSize" Value="11"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/>
   </Style>
   <Style x:Key="AudioMeter" TargetType="ProgressBar">
    <Setter Property="Maximum" Value="1"/><Setter Property="Height" Value="6"/><Setter Property="VerticalAlignment" Value="Center"/>
-   <Setter Property="Background" Value="{StaticResource ControlHoverBrush}"/><Setter Property="Foreground" Value="{StaticResource GoodBrush}"/>
+   <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}"/><Setter Property="Foreground" Value="{DynamicResource GoodBrush}"/>
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ProgressBar">
     <Grid ClipToBounds="True"><Border Background="{TemplateBinding Background}" CornerRadius="3"/>
      <Grid x:Name="PART_Track"><Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" CornerRadius="3" HorizontalAlignment="Left"/></Grid>
@@ -49,8 +65,9 @@
   <Style x:Key="StartButton" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
    <Style.Triggers>
     <DataTrigger Binding="{Binding Running}" Value="True">
-     <Setter Property="Background" Value="{StaticResource ControlHoverBrush}"/>
-     <Setter Property="BorderBrush" Value="{StaticResource LineHoverBrush}"/>
+     <Setter Property="Background" Value="{DynamicResource ControlHoverBrush}"/>
+     <Setter Property="BorderBrush" Value="{DynamicResource LineHoverBrush}"/>
+     <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
     </DataTrigger>
    </Style.Triggers>
   </Style>
@@ -74,13 +91,23 @@
  <StackPanel Margin="28,22,28,14">
 
   <!-- Header -->
-  <Grid Margin="2,0,2,18"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+  <Grid Margin="2,0,2,18"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
    <Image x:Name="HeaderIcon" Width="30" Height="30" RenderOptions.BitmapScalingMode="HighQuality" Margin="0,0,12,0"/>
    <TextBlock Grid.Column="1" Text="Apex回放" FontFamily="{StaticResource DisplayFont}" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
-   <Border Grid.Column="2" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="13" Padding="11,5" VerticalAlignment="Center">
+   <Border Grid.Column="2" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="13" Padding="2" VerticalAlignment="Center" Margin="0,0,10,0">
     <StackPanel Orientation="Horizontal">
-     <TextBlock Text="&#xE714;" Style="{StaticResource IconText}" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,0,7,0"/>
-     <TextBlock Text="{Binding VideoSummary}" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+     <RadioButton Style="{StaticResource ThemeOption}" IsChecked="{Binding Theme, Converter={StaticResource Is}, ConverterParameter=auto}" ToolTip="自动：7:00–19:00 浅色，其余时间深色">
+      <TextBlock Text="&#xE823;" Style="{StaticResource IconText}" FontSize="12"/></RadioButton>
+     <RadioButton Style="{StaticResource ThemeOption}" IsChecked="{Binding Theme, Converter={StaticResource Is}, ConverterParameter=light}" ToolTip="浅色">
+      <TextBlock Text="&#xE706;" Style="{StaticResource IconText}" FontSize="12"/></RadioButton>
+     <RadioButton Style="{StaticResource ThemeOption}" IsChecked="{Binding Theme, Converter={StaticResource Is}, ConverterParameter=dark}" ToolTip="深色">
+      <TextBlock Text="&#xE708;" Style="{StaticResource IconText}" FontSize="12"/></RadioButton>
+    </StackPanel>
+   </Border>
+   <Border Grid.Column="3" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource LineBrush}" BorderThickness="1" CornerRadius="13" Padding="11,5" VerticalAlignment="Center">
+    <StackPanel Orientation="Horizontal">
+     <TextBlock Text="&#xE714;" Style="{StaticResource IconText}" FontSize="12" Foreground="{DynamicResource MutedBrush}" Margin="0,0,7,0"/>
+     <TextBlock Text="{Binding VideoSummary}" Foreground="{DynamicResource MutedBrush}" FontSize="12"/>
     </StackPanel>
    </Border>
   </Grid>
@@ -97,7 +124,7 @@
        </Grid>
        <TextBlock Text="{Binding StatusTitle}" FontFamily="{StaticResource DisplayFont}" FontSize="21" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
       </StackPanel>
-      <TextBlock Text="{Binding StatusDetail}" Foreground="{StaticResource MutedBrush}" Margin="32,6,0,0" TextWrapping="Wrap" LineHeight="20">
+      <TextBlock Text="{Binding StatusDetail}" Foreground="{DynamicResource MutedBrush}" Margin="32,6,0,0" TextWrapping="Wrap" LineHeight="20">
        <TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers>
         <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
        </Style.Triggers></Style></TextBlock.Style>
@@ -110,7 +137,7 @@
       </StackPanel>
      </Button>
     </Grid>
-    <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,20,0,16"/>
+    <Border Height="1" Background="{DynamicResource LineBrush}" Margin="0,20,0,16"/>
     <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
      <StackPanel Margin="0,0,12,0">
       <TextBlock Text="已缓存" Style="{StaticResource StatLabel}"/>
@@ -133,7 +160,7 @@
      </StackPanel>
     </Grid>
     <Button Click="Retry_Click" Visibility="{Binding RetryVisibility}" Margin="0,16,0,0" HorizontalAlignment="Left"
-     Background="#2B2214" BorderBrush="#4A3A1C" Foreground="{StaticResource WarnBrush}">
+     Background="{DynamicResource WarnSoftBrush}" BorderBrush="{DynamicResource WarnLineBrush}" Foreground="{DynamicResource WarnBrush}">
      <StackPanel Orientation="Horizontal">
       <TextBlock Text="&#xE72C;" Style="{StaticResource IconText}" FontSize="12" Margin="0,0,8,0"/>
       <TextBlock Text="重试保存"/>
@@ -164,8 +191,8 @@
      <TextBlock Text="&#xE714;" Style="{StaticResource CardIcon}"/>
      <TextBlock Grid.Column="1" Text="视频" Style="{StaticResource CardTitle}"/>
      <StackPanel Grid.Column="2" Orientation="Horizontal" Visibility="{Binding Running, Converter={StaticResource Visible}}">
-      <TextBlock Text="&#xE72E;" Style="{StaticResource IconText}" FontSize="11" Foreground="{StaticResource SubtleBrush}" Margin="0,0,6,0"/>
-      <TextBlock Text="停止采集后可修改" Foreground="{StaticResource SubtleBrush}" FontSize="12"/>
+      <TextBlock Text="&#xE72E;" Style="{StaticResource IconText}" FontSize="11" Foreground="{DynamicResource SubtleBrush}" Margin="0,0,6,0"/>
+      <TextBlock Text="停止采集后可修改" Foreground="{DynamicResource SubtleBrush}" FontSize="12"/>
      </StackPanel>
     </Grid>
     <Grid IsEnabled="{Binding VideoSettingsEnabled}">
@@ -222,15 +249,15 @@
      <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
      <TextBlock Text="Apex" Style="{StaticResource Label}"/>
      <ProgressBar Grid.Column="1" Value="{Binding GameLevel}" Style="{StaticResource AudioMeter}"/>
-     <TextBlock Grid.Column="2" Text="{Binding GameAudioStatus}" Style="{StaticResource Value}" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+     <TextBlock Grid.Column="2" Text="{Binding GameAudioStatus}" Style="{StaticResource Value}" Foreground="{DynamicResource MutedBrush}" FontSize="12"/>
      <TextBlock Grid.Row="1" Text="麦克风" Style="{StaticResource Label}" Margin="0,10,0,0"/>
      <ProgressBar Grid.Row="1" Grid.Column="1" Value="{Binding MicLevel}" Style="{StaticResource AudioMeter}" Margin="0,10,0,0"/>
-     <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding MicAudioStatus}" Style="{StaticResource Value}" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,10,0,0"/>
+     <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding MicAudioStatus}" Style="{StaticResource Value}" Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,10,0,0"/>
      <TextBlock Grid.Row="2" Text="其他应用" Style="{StaticResource Label}" Margin="0,10,0,0"/>
      <ProgressBar Grid.Row="2" Grid.Column="1" Value="{Binding DesktopLevel}" Style="{StaticResource AudioMeter}" Margin="0,10,0,0"/>
-     <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding DesktopAudioStatus}" Style="{StaticResource Value}" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,10,0,0"/>
+     <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding DesktopAudioStatus}" Style="{StaticResource Value}" Foreground="{DynamicResource MutedBrush}" FontSize="12" Margin="0,10,0,0"/>
     </Grid>
-    <Border Height="1" Background="{StaticResource LineBrush}" Margin="0,18,0,16"/>
+    <Border Height="1" Background="{DynamicResource LineBrush}" Margin="0,18,0,16"/>
     <Grid>
      <Grid.ColumnDefinitions><ColumnDefinition Width="96"/><ColumnDefinition/></Grid.ColumnDefinitions>
      <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
@@ -242,8 +269,8 @@
      <TextBlock Grid.Row="2" Text="音量平衡" Style="{StaticResource Label}" Margin="0,14,0,0"/>
      <Slider Grid.Row="2" Grid.Column="1" Style="{StaticResource CenterSlider}" Minimum="-12" Maximum="12" Value="{Binding Balance, UpdateSourceTrigger=PropertyChanged}" Margin="0,14,0,0"/>
      <Grid Grid.Row="3" Grid.Column="1" Margin="0,2,0,0">
-      <TextBlock Text="其他声音" Foreground="{StaticResource SubtleBrush}" FontSize="11"/>
-      <TextBlock Text="麦克风" Foreground="{StaticResource SubtleBrush}" FontSize="11" HorizontalAlignment="Right"/>
+      <TextBlock Text="其他声音" Foreground="{DynamicResource SubtleBrush}" FontSize="11"/>
+      <TextBlock Text="麦克风" Foreground="{DynamicResource SubtleBrush}" FontSize="11" HorizontalAlignment="Right"/>
      </Grid>
     </Grid>
    </StackPanel>
