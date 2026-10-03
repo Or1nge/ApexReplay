@@ -51,7 +51,7 @@ class CaptureSession {
         SYSTEMTIME now{};GetLocalTime(&now);
         std::wostringstream name;name<<L"Apex_"<<std::setfill(L'0')<<std::setw(4)<<now.wYear<<std::setw(2)<<now.wMonth<<std::setw(2)<<now.wDay<<L"_"
             <<std::setw(2)<<now.wHour<<std::setw(2)<<now.wMinute<<std::setw(2)<<now.wSecond<<L"_"<<std::setw(3)<<now.wMilliseconds
-            <<L"_"<<(job.clip.kind=="multikill"?L"长镜头":L"测试")<<L"_"<<job.clip.kills<<L"_"<<GetCurrentProcessId()<<L"_"<<exportId_++<<L".mp4";
+            <<L"_"<<(job.clip.kind=="multikill"?L"长镜头":job.clip.kind=="burst"?L"高伤害":L"测试")<<L"_"<<job.clip.kills<<L"_"<<GetCurrentProcessId()<<L"_"<<exportId_++<<L".mp4";
         job.file=directory/name.str();exports_.push(std::move(job));
     }
     void drain(RuleEngine& rules){for(auto& clip:rules.takeReady())publishClip(std::move(clip));ring_.pin(rules.earliestNeeded());}
@@ -65,8 +65,10 @@ class CaptureSession {
                 if(!frame.available){flow.boundary(frame.time);detector.reset();drain(rules);pending_=false;continue;}
                 double begin=qpcSeconds();auto observation=detector.process(frame.images,frame.time,frame.firing);
                 auto settings=settings_.load();rules.updateTimings(settings->longPre,settings->longPost);
+                rules.updateThresholds(settings->burstSeconds,settings->burstDamage,settings->fastBurstSeconds,settings->fastBurstDamage);
                 {std::lock_guard lock(statusMutex_);detectionStatus_=observation.status;}
                 if(flow.process(observation))detector.reset();for(const auto& event:observation.events)notify_({{"type","event"},{"event",eventJson(event)}});
+                for(const auto& correction:observation.resultCorrections)notify_({{"type","result_correction"},{"target",correction.first},{"kind","assist"}});
                 drain(rules);pending_=rules.pending();analysisMs_=(qpcSeconds()-begin)*1000;
             }
             rules.boundary(ring_.latest());drain(rules);pending_=false;

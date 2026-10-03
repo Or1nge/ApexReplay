@@ -141,16 +141,19 @@
     </ControlTemplate.Triggers>
    </ControlTemplate></Setter.Value></Setter>
   </Style>
-  <!-- Centred value such as a balance: no fill, a tick marks the middle. -->
+  <!-- Balance has a bright rail and accent thumb so it reads as an active control. -->
   <Style x:Key="CenterSlider" TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Slider">
     <Grid x:Name="Root" Height="24" Background="Transparent">
-     <Border Height="4" CornerRadius="2" Background="{DynamicResource ControlHoverBrush}" VerticalAlignment="Center" Margin="2,0"/>
-     <Border Width="2" Height="10" CornerRadius="1" Background="{DynamicResource SubtleBrush}" HorizontalAlignment="Center"/>
+     <Border Height="4" CornerRadius="2" Background="{DynamicResource BalanceRailBrush}" VerticalAlignment="Center" Margin="2,0"/>
+     <Border Width="2" Height="10" CornerRadius="1" Background="{DynamicResource MutedBrush}" HorizontalAlignment="Center"/>
      <Track x:Name="PART_Track">
       <Track.DecreaseRepeatButton><RepeatButton Command="Slider.DecreaseLarge" Style="{StaticResource SliderFill}" Background="Transparent"/></Track.DecreaseRepeatButton>
       <Track.IncreaseRepeatButton><RepeatButton Command="Slider.IncreaseLarge" Style="{StaticResource SliderFill}" Background="Transparent"/></Track.IncreaseRepeatButton>
-      <Track.Thumb><Thumb Focusable="False" Template="{StaticResource SliderThumb}"/></Track.Thumb>
+      <Track.Thumb><Thumb Focusable="False"><Thumb.Template><ControlTemplate TargetType="Thumb">
+       <Grid Width="18" Height="18"><Ellipse x:Name="Halo" Margin="-5" Fill="{DynamicResource Accent}" Opacity="0"/><Ellipse Fill="{DynamicResource Accent}" Stroke="{DynamicResource ThumbBrush}" StrokeThickness="2"/></Grid>
+       <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Halo" Property="Opacity" Value=".18"/></Trigger><Trigger Property="IsDragging" Value="True"><Setter TargetName="Halo" Property="Opacity" Value=".3"/></Trigger></ControlTemplate.Triggers>
+      </ControlTemplate></Thumb.Template></Thumb></Track.Thumb>
      </Track>
     </Grid>
     <ControlTemplate.Triggers>

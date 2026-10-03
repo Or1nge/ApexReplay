@@ -20,6 +20,7 @@
  <SolidColorBrush x:Key="WarnLineBrush" Color="#4A3A1C"/>
  <SolidColorBrush x:Key="OverlayBrush" Color="#FFFFFF"/>
  <SolidColorBrush x:Key="ThumbBrush" Color="#FFFFFF"/>
+ <SolidColorBrush x:Key="BalanceRailBrush" Color="#70727E"/>
  <SolidColorBrush x:Key="ThumbLineBrush" Color="#00000000"/>
  <SolidColorBrush x:Key="InverseBrush" Color="#141519"/>
 </ResourceDictionary>

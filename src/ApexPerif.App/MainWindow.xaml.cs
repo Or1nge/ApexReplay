@@ -5,6 +5,8 @@ using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Input;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -17,6 +19,8 @@ public partial class MainWindow : Window
     private Forms.NotifyIcon? tray;
     private System.Drawing.Icon? trayIcon;
     private bool exiting,settingsLoaded,uiPreview;
+    private bool restoringStartup;
+    private readonly TaskCompletionSource workerReady=new(TaskCreationOptions.RunContinuationsAsynchronously);
     private string? restoredMicrophoneId;
     private readonly Dictionary<int,string> audioErrors=new();
     private readonly DispatcherTimer changes=new(){Interval=TimeSpan.FromMilliseconds(350)};
@@ -28,7 +32,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         var args=Environment.GetCommandLineArgs();
-        if(args.Length==5&&args[1]=="--settings-smoke")settingsPath=Path.GetFullPath(args[2]);
+        if(args.Length==5&&args[1] is "--settings-smoke" or "--startup-smoke")settingsPath=Path.GetFullPath(args[2]);
         InitializeComponent();DataContext=model;
         // Settings are read before the window appears so the saved appearance shows without a flash.
         bool integration=args.Length>=3&&args[1]=="--integration-smoke",uiSmoke=args.Length>=3&&args[1]=="--ui-smoke";
@@ -40,14 +44,24 @@ public partial class MainWindow : Window
         ApplyTheme();
         model.PropertyChanged+=(_,e)=>{if(e.PropertyName==nameof(ViewModel.Theme))ApplyTheme();};
         themeClock.Tick+=(_,_)=>ApplyTheme();themeClock.Start();
-        SourceInitialized+=(_,_)=>UpdateTitleBar();
+        SourceInitialized+=(_,_)=>{UpdateTitleBar();HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)?.AddHook(WindowMessage);};
         model.StatusBrush=IdleBrush;
         Loaded+=LoadedAsync;Closing+=OnClosing;
         // The folder can change outside the app (clips deleted or moved), so re-read it whenever the window comes back.
         Activated+=(_,_)=>RefreshClips();
         model.PropertyChanged+=(_,e)=>{if(e.PropertyName==nameof(ViewModel.OutputDirectory))RefreshClips();};
         model.SettingsChanged+=()=>{if(settingsLoaded){SaveSettings();changes.Stop();changes.Start();}};
+        model.PropertyChanged+=(_,e)=>{
+            if(e.PropertyName==nameof(ViewModel.StartWithWindows)&&settingsLoaded&&!restoringStartup&&!args.Any(arg=>arg.EndsWith("-smoke",StringComparison.Ordinal)))
+                try{StartupRegistration.SetEnabled(model.StartWithWindows);}catch(Exception error){restoringStartup=true;model.StartWithWindows=StartupRegistration.IsEnabled;restoringStartup=false;Error("开机自启设置失败："+error.Message);}
+        };
         changes.Tick+=async(_,_)=>{changes.Stop();if(model.Running&&client is not null)try{await client.SendAsync("configure",model.Settings());}catch(Exception e){Error(e.Message);}};
+    }
+    private IntPtr WindowMessage(IntPtr hwnd,int message,IntPtr wParam,IntPtr lParam,ref bool handled)
+    {
+        if((uint)message==App.ShowMessage){ShowInTaskbar=true;Show();WindowState=WindowState.Normal;Activate();handled=true;}
+        else if((uint)message==App.ExitMessage){ExitAsync();handled=true;}
+        return IntPtr.Zero;
     }
     private async void LoadedAsync(object sender,RoutedEventArgs e)
     {
@@ -75,9 +89,12 @@ public partial class MainWindow : Window
             // Overview and settings pages: ui.png / ui.settings.png in dark, ui.light.png / ui.light.settings.png in light.
             foreach(var light in new[]{false,true})
             {
-                Themes.Apply(light);UpdateTitleBar();NavHome.IsChecked=true;await Task.Delay(500);UpdateLayout();
+                Themes.Apply(light);UpdateTitleBar();NavHome.IsChecked=true;SettingsScroll.ScrollToTop();await Task.Delay(500);UpdateLayout();
                 var path=light?Path.ChangeExtension(args[2],"light.png"):args[2];Snapshot(path);
                 NavSettings.IsChecked=true;await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"settings.png"));
+                SettingsScroll.ScrollToVerticalOffset(SettingsScroll.VerticalOffset+CriteriaSection.TranslatePoint(new System.Windows.Point(),SettingsScroll).Y-20);
+                await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"criteria.png"));
+                SettingsScroll.ScrollToBottom();await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"general.png"));
             }
             exiting=true;System.Windows.Application.Current.Shutdown();return;
         }
@@ -90,6 +107,7 @@ public partial class MainWindow : Window
                 model.OutputDirectory=expected;model.MicrophoneId="test-microphone";model.MicNoiseSuppression=false;
                 model.ShortPre=7;model.ShortPost=4;model.LongPre=13;model.LongPost=8;model.Balance=-3;model.ReplayMinutes=42;model.MemoryPercent=45;
                 model.VideoResolution="1080p";model.VideoCodec="h264";model.VideoBitrateMbps=75;model.VideoPreset="p4";model.Theme="light";
+                model.BurstSeconds=6;model.BurstDamage=300;model.FastBurstSeconds=1.5;model.FastBurstDamage=160;model.StartWithWindows=true;
             }
             else
             {
@@ -98,21 +116,37 @@ public partial class MainWindow : Window
             }
             bool restored=model.OutputDirectory==expected&&model.MicrophoneId=="test-microphone"&&!model.MicNoiseSuppression&&
                 model.ShortPre==7&&model.ShortPost==4&&model.LongPre==13&&model.LongPost==8&&model.Balance==-3&&model.ReplayMinutes==42&&model.MemoryPercent==45&&
-                model.VideoResolution=="1080p"&&model.VideoCodec=="h264"&&model.VideoBitrateMbps==75&&model.VideoPreset=="p4"&&model.Theme=="light";
+                model.VideoResolution=="1080p"&&model.VideoCodec=="h264"&&model.VideoBitrateMbps==75&&model.VideoPreset=="p4"&&model.Theme=="light"&&
+                model.BurstSeconds==6&&model.BurstDamage==300&&model.FastBurstSeconds==1.5&&model.FastBurstDamage==160&&model.StartWithWindows;
             File.WriteAllText(args[4],JsonSerializer.Serialize(new{passed=restored,mode=args[3],settings=model.Settings()}));
             // Exit immediately, before the debounced worker configuration runs.
             exiting=true;changes.Stop();System.Windows.Application.Current.Shutdown();return;
         }
         CreateTray();
+        if(args.Contains("--startup")){ShowInTaskbar=false;Hide();}
+        if(!integration&&!args.Contains("--startup-smoke"))
+        {
+            restoringStartup=true;
+            try{
+                if(args.Contains("--enable-startup"))StartupRegistration.SetEnabled(true);
+                else if(args.Contains("--disable-startup"))StartupRegistration.SetEnabled(false);
+                model.StartWithWindows=StartupRegistration.IsEnabled;
+            }catch(Exception error){Error(error.Message);}
+            finally{restoringStartup=false;}
+        }
         client=new WorkerClient();
         client.Message+=message=>Dispatcher.BeginInvoke(()=>Receive(message));
         client.Failed+=message=>Dispatcher.BeginInvoke(()=>{model.Ready=false;model.Running=false;model.ResetAudio("连接中断");Error(message);});
         try{
             await client.StartAsync();if(integration)await IntegrationSmokeAsync(args[2]);
-            else if(args.Contains("--resume-capture")&&!string.IsNullOrWhiteSpace(model.OutputDirectory)){
-                Directory.CreateDirectory(model.OutputDirectory);SaveSettings();await client.SendAsync("start",model.Settings());model.Running=true;
+            else {
+                await workerReady.Task.WaitAsync(TimeSpan.FromSeconds(10));await StartCaptureAsync();
+                if(args.Length==5&&args[1]=="--startup-smoke"){
+                    var until=DateTime.UtcNow.AddSeconds(8);while(model.StatusTitle is not ("等待 Apex" or "正在缓存" or "已暂停")){if(DateTime.UtcNow>until)throw new TimeoutException("自动采集未开始");await Task.Delay(50);}
+                    File.WriteAllText(args[4],JsonSerializer.Serialize(new{passed=model.Running,automaticCapture=model.Running,state=model.StatusTitle,output=model.OutputDirectory}));await ExitForTestAsync();
+                }
             }
-        }catch(Exception error){Error(error.Message);if(integration){File.WriteAllText(args[2],JsonSerializer.Serialize(new{passed=false,error=error.Message}));await ExitForTestAsync();}}
+        }catch(Exception error){Error(error.Message);if(integration||args.Contains("--startup-smoke")){File.WriteAllText(integration?args[2]:args[4],JsonSerializer.Serialize(new{passed=false,error=error.Message}));await ExitForTestAsync();}}
     }
     private async Task IntegrationSmokeAsync(string output)
     {
@@ -144,13 +178,13 @@ public partial class MainWindow : Window
     private void CreateTray()
     {
         var menu=new Forms.ContextMenuStrip();
-        menu.Items.Add("打开 Apex回放",null,(_,_)=>Dispatcher.Invoke(()=>{Show();WindowState=WindowState.Normal;Activate();}));
+        menu.Items.Add("打开 Apex回放",null,(_,_)=>Dispatcher.Invoke(()=>{ShowInTaskbar=true;Show();WindowState=WindowState.Normal;Activate();}));
         menu.Items.Add("停止采集",null,async(_,_)=>{if(client is not null)try{await client.SendAsync("stop");}catch(Exception error){Error(error.Message);}});
         menu.Items.Add("退出",null,(_,_)=>Dispatcher.Invoke(ExitAsync));
         using(var resource=System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/Assets/apex-replay.ico")).Stream)
         using(var icon=new System.Drawing.Icon(resource))trayIcon=(System.Drawing.Icon)icon.Clone();
         tray=new Forms.NotifyIcon{Text="Apex回放",Icon=trayIcon,Visible=true,ContextMenuStrip=menu};
-        tray.DoubleClick+=(_,_)=>Dispatcher.Invoke(()=>{Show();WindowState=WindowState.Normal;Activate();});
+        tray.DoubleClick+=(_,_)=>Dispatcher.Invoke(()=>{ShowInTaskbar=true;Show();WindowState=WindowState.Normal;Activate();});
     }
     private void OnClosing(object? sender,CancelEventArgs e){if(!exiting){SaveSettings();e.Cancel=true;Hide();}}
     private async void ExitAsync()
@@ -177,20 +211,34 @@ public partial class MainWindow : Window
         model.OutputDirectory=dialog.FolderName;
         if(model.StatusTitle=="准备就绪")model.StatusDetail="";
     }
+    private async Task StartCaptureAsync()
+    {
+        if(client is null)return;
+        if(string.IsNullOrWhiteSpace(model.OutputDirectory))model.OutputDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),"Apex回放");
+        Directory.CreateDirectory(model.OutputDirectory);
+        string probe=Path.Combine(model.OutputDirectory,".apexperif-write-"+Guid.NewGuid().ToString("N"));
+        using(var f=new FileStream(probe,FileMode.CreateNew,FileAccess.Write,FileShare.None,1,FileOptions.DeleteOnClose))f.WriteByte(0);
+        SaveSettings();await client.SendAsync("start",model.Settings());model.Running=true;
+        model.StatusTitle="等待 Apex";model.StatusDetail="游戏窗口出现后自动开始缓存";model.StatusBrush=BusyBrush;
+    }
     private async void Start_Click(object sender,RoutedEventArgs e)
     {
         if(client is null)return;
         try
         {
             if(model.Running){await client.SendAsync("stop");return;}
-            if(string.IsNullOrWhiteSpace(model.OutputDirectory)){Browse_Click(sender,e);if(string.IsNullOrWhiteSpace(model.OutputDirectory))return;}
-            Directory.CreateDirectory(model.OutputDirectory);
-            string probe=Path.Combine(model.OutputDirectory,".apexperif-write-"+Guid.NewGuid().ToString("N"));
-            using(var f=new FileStream(probe,FileMode.CreateNew,FileAccess.Write,FileShare.None,1,FileOptions.DeleteOnClose))f.WriteByte(0);
-            SaveSettings();await client.SendAsync("start",model.Settings());model.Running=true;
-            model.StatusTitle="等待 Apex";model.StatusDetail="游戏窗口出现后自动开始缓存";model.StatusBrush=BusyBrush;
+            await StartCaptureAsync();
         }
         catch(Exception error){Error(error.Message);}
+    }
+    private void NumberInput_KeyDown(object sender,System.Windows.Input.KeyEventArgs e)
+    {
+        if(e.Key!=Key.Enter||sender is not System.Windows.Controls.TextBox box)return;
+        var binding=box.GetBindingExpression(System.Windows.Controls.TextBox.TextProperty);binding?.UpdateSource();binding?.UpdateTarget();Keyboard.ClearFocus();e.Handled=true;
+    }
+    private void NumberInput_LostFocus(object sender,RoutedEventArgs e)
+    {
+        if(sender is System.Windows.Controls.TextBox box){var binding=box.GetBindingExpression(System.Windows.Controls.TextBox.TextProperty);binding?.UpdateSource();binding?.UpdateTarget();}
     }
     private const int ClipLimit=30;
     private void RefreshClips()
@@ -241,6 +289,7 @@ public partial class MainWindow : Window
                 model.Microphones.Add(new(mic.GetProperty("id").GetString()??"",mic.GetProperty("name").GetString()??"麦克风"));
             if(!string.IsNullOrEmpty(selected)&&!model.Microphones.Any(m=>m.Id==selected))model.Microphones.Add(new(selected,"上次使用的麦克风（未连接）"));
             model.MicrophoneId=selected;
+            workerReady.TrySetResult();
         }
         else if(type=="status")
         {

@@ -12,8 +12,8 @@
 namespace apex {
 enum class ResultKind { Knockdown, Elimination, Assist, SquadWipe };
 struct Rules {
-    std::string version = "apex-zh-v2-long-only";
-    double burstDamage=150, burstSeconds=3, fastBurstDamage=100, fastBurstSeconds=1.5;
+    std::string version = "apex-zh-v3-results";
+    double burstDamage=250, burstSeconds=5, fastBurstDamage=150, fastBurstSeconds=2;
     double resultGraceSeconds=2, fastMergeSeconds=12, bridgeMergeSeconds=20;
     double bridgeDamage=60, bridgeDamageSeconds=3, bridgeQuietSeconds=6;
     double maxClipSeconds=90, splitOverlapSeconds=2;
@@ -37,7 +37,7 @@ struct ClipPlan {
 class RuleEngine {
     struct Candidate {
         double firstAction=0,lastResult=0;
-        bool longContinuation=false, squadWipe=false;
+        bool longContinuation=false, squadWipe=false,highDamage=false;
         std::set<std::string> opponents;
         std::vector<CombatEvent> events;
     };
@@ -53,24 +53,14 @@ class RuleEngine {
         return e.target.empty() ? "unknown@"+std::to_string(e.time) : e.target;
     }
     std::optional<Burst> burst(double time) const {
-        for (double width : {rules_.fastBurstSeconds,rules_.burstSeconds}) {
-            int best=0; Burst found{};
-            for (size_t i=0;i<damage_.size();++i) {
-                const auto& first=damage_[i];
-                if (!first.firing || first.time>time || time-first.time>width+rules_.resultGraceSeconds) continue;
-                int sum=0; double end=first.time;
-                for (size_t j=i;j<damage_.size();++j) {
-                    const auto& d=damage_[j];
-                    if (d.time-first.time>width || d.time>time || d.magazine!=first.magazine) break;
-                    if (!d.firing) continue;
-                    sum+=d.damage; end=d.time;
-                }
-                double threshold = width==rules_.fastBurstSeconds ? rules_.fastBurstDamage : rules_.burstDamage;
-                if (sum>=threshold && time-end<=rules_.resultGraceSeconds && sum>best) {
-                    best=sum; found={first.time,end,sum};
-                }
-            }
-            if (best) return found;
+        for(size_t i=0;i<damage_.size();++i){
+            const auto& first=damage_[i];
+            if(first.time>time||time-first.time>rules_.burstSeconds+rules_.resultGraceSeconds)continue;
+            int sum=0,peak=0;double end=first.time;size_t last=i;
+            for(size_t j=i;j<damage_.size();++j){const auto& d=damage_[j];if(d.time-first.time>rules_.burstSeconds||d.time>time)break;sum+=d.damage;end=d.time;last=j;}
+            if(sum<rules_.burstDamage||time-end>rules_.resultGraceSeconds)continue;
+            for(size_t j=i;j<=last;++j){int fast=0;for(size_t k=j;k<=last&&damage_[k].time-damage_[j].time<=rules_.fastBurstSeconds;++k)fast+=damage_[k].damage;peak=std::max(peak,fast);}
+            if(peak>rules_.fastBurstDamage)return Burst{first.time,end,sum};
         }
         return {};
     }
@@ -95,12 +85,12 @@ class RuleEngine {
     void finish(double available,bool forced=false) {
         if (!candidate_) return;
         const auto& c=*candidate_;
-        if (c.opponents.size()>=2 || c.longContinuation) {
+        if (c.opponents.size()>=2 || c.longContinuation || c.highDamage) {
             double start=std::max(0.0,c.firstAction-rules_.longPre);
             if (splitStart_) start=std::max(start,*splitStart_);
             double wanted=c.lastResult+rules_.longPost;
             double end=std::min(wanted,available);
-            if (end>start) ready_.push_back({start,end,"multikill",rules_.version,c.events,
+            if (end>start) ready_.push_back({start,end,c.opponents.size()>=2||c.longContinuation?"multikill":"burst",rules_.version,c.events,
                 forced && end<wanted,c.squadWipe,c.opponents.size()});
         }
         candidate_.reset(); splitStart_.reset();
@@ -109,6 +99,10 @@ public:
     explicit RuleEngine(Rules rules={}):rules_(std::move(rules)) {}
     void updateTimings(double lp,double lo) {
         rules_.longPre=std::clamp(lp,0.0,30.0); rules_.longPost=std::clamp(lo,0.0,20.0);
+    }
+    void updateThresholds(double seconds,double damage,double fastSeconds,double fastDamage){
+        rules_.burstSeconds=std::clamp(seconds,1.0,15.0);rules_.burstDamage=std::clamp(damage,50.0,2000.0);
+        rules_.fastBurstSeconds=std::clamp(fastSeconds,.5,rules_.burstSeconds);rules_.fastBurstDamage=std::clamp(fastDamage,0.0,1000.0);
     }
     void damage(DamageSample sample) {
         if (sample.damage<=0 || sample.damage>500 || !std::isfinite(sample.time)) return;
@@ -153,7 +147,8 @@ public:
                 splitStart_=std::max(0.0,priorEnd-rules_.splitOverlapSeconds);
             }
         }
-        if (!candidate_) candidate_=Candidate{action,event.time,continuingLong,false,{},{}};
+        if (!candidate_) candidate_=Candidate{action,event.time,continuingLong,false,false,{},{}};
+        candidate_->highDamage|=b.has_value();
         candidate_->lastResult=event.time;
         candidate_->squadWipe|=event.time-lastWipe_<=3;
         candidate_->events.push_back(event);
@@ -172,6 +167,15 @@ public:
         if(candidate_){if(candidate_->opponents.erase(oldTarget))candidate_->opponents.insert(target);for(auto& e:candidate_->events)if(e.target==oldTarget)e.target=target;}
         if(knocked_.contains(oldTarget)){knocked_[target]=knocked_[oldTarget];knocked_.erase(oldTarget);}
         for(int kind=0;kind<3;++kind){auto old=std::to_string(kind)+":"+oldTarget;if(seen_.contains(old)){seen_[std::to_string(kind)+":"+target]=seen_[old];seen_.erase(old);}}
+    }
+    void correctResult(const std::string& target,ResultKind kind){
+        if(kind!=ResultKind::Assist)return;
+        if(candidate_){
+            for(auto& event:candidate_->events)if(event.target==target&&event.kind==ResultKind::Knockdown)event.kind=kind;
+            bool ownResult=false;for(const auto& event:candidate_->events)if(event.target==target&&event.kind!=ResultKind::Assist)ownResult=true;
+            if(!ownResult)candidate_->opponents.erase(target);
+        }
+        knocked_.erase(target);
     }
     std::optional<double> earliestNeeded()const{if(!candidate_)return {};return splitStart_.value_or(std::max(0.,candidate_->firstAction-rules_.longPre-1));}
     std::vector<ClipPlan> takeReady() { auto r=std::move(ready_); ready_.clear(); return r; }

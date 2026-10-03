@@ -85,6 +85,7 @@ struct Settings {
     std::string outputDirectory,microphoneId,controllerFire="LB";
     double shortPre=5,shortPost=3,longPre=10,longPost=5,balance=0;
     double replayMinutes=30,memoryPercent=60;
+    double burstSeconds=5,burstDamage=250,fastBurstSeconds=2,fastBurstDamage=150;
     bool micNoiseSuppression=true;
     std::string videoResolution="source",videoCodec="hevc",videoPreset="p6";
     double videoBitrateMbps=60;
@@ -103,6 +104,8 @@ struct Settings {
         s.shortPre=number("shortPre",5,20);s.shortPost=number("shortPost",3,15);s.longPre=number("longPre",10,30);s.longPost=number("longPost",5,20);
         s.balance=std::clamp(j.value("balance",0.0),-12.0,12.0);if(!std::isfinite(s.balance))throw std::runtime_error("Nonfinite balance");
         s.replayMinutes=std::max(1.0,number("replayMinutes",30,120));s.memoryPercent=std::max(10.0,number("memoryPercent",60,90));
+        s.burstSeconds=std::max(1.0,number("burstSeconds",5,15));s.burstDamage=std::max(50.0,number("burstDamage",250,2000));
+        s.fastBurstSeconds=std::clamp(number("fastBurstSeconds",2,15),.5,s.burstSeconds);s.fastBurstDamage=number("fastBurstDamage",150,1000);
         return s;
     }
 };

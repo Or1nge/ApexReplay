@@ -8,6 +8,7 @@ PowerShell 7 中运行：
 ./scripts/build.ps1
 ./tests/ipc-smoke.ps1
 ./tests/settings-smoke.ps1
+./tests/startup-smoke.ps1
 ./tests/video-smoke.ps1
 ```
 
@@ -43,7 +44,9 @@ PowerShell 7 中运行：
 ./dist/Apex回放/Apex回放.exe --ui-smoke "$PWD/artifacts/ui.png"
 ```
 
-`--ui-smoke` 输出概览页和设置页截图：深色 `ui.png`、`ui.settings.png`，浅色 `ui.light.png`、`ui.light.settings.png`。
+`--ui-smoke` 输出概览页、设置页顶部、保存标准和通用设置的深浅两种截图：`ui.png`、`ui.settings.png`、`ui.criteria.png`、`ui.general.png` 及对应 `ui.light.*.png`。
+
+`tests/startup-smoke.ps1` 使用隔离的配置及素材目录，验证启动界面后无需点击按钮就开始等待 Apex。`--startup` 用于 Windows 登录后的托盘启动；`--enable-startup` / `--disable-startup` 用于本地更新时设置当前运行包的自启注册；`--quit` 正常退出当前实例。普通启动和登录启动共享单实例限制，诊断 smoke 模式不占用正常实例。
 
 采集测试会显示独立测试窗口，采集默认麦克风，并播放很轻的测试音。使用一个新的目录，以保留旧测试结果并避免覆盖文件。进程音轨排除测试可从另一个 PowerShell 进程启动 `--test-audio 880 12`，再运行 `--selftest`，两个音源应分属第一、第三轨。
 

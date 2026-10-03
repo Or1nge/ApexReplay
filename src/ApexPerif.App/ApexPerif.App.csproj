@@ -10,6 +10,7 @@
     <RootNamespace>ApexPerif</RootNamespace>
     <Product>Apex回放</Product>
     <Title>Apex回放</Title>
+    <Version>0.3.0-preview</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\apex-replay.ico</ApplicationIcon>
   </PropertyGroup>

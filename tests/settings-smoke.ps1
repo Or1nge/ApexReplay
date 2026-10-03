@@ -11,5 +11,5 @@ foreach($taskMode in 'write','read','read-missing'){
     $taskResult=Get-Content -LiteralPath $taskReport -Raw | ConvertFrom-Json
     if(!$taskResult.passed){throw "Settings $taskMode failed"}
 }
-Write-Output 'PASS directory / microphone / denoise / balance / cache / timings / video resolution / codec / bitrate / preset / theme survived immediate exit and new processes'
+Write-Output 'PASS directory / microphone / denoise / balance / cache / timings / video / theme / Windows startup / four damage criteria survived immediate exit and new processes'
 Write-Output $taskTest

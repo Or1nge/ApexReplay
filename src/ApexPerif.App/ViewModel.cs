@@ -20,14 +20,20 @@ public sealed class ViewModel : INotifyPropertyChanged
     private double sp=5,so=3,lp=10,lo=5,balance=0,gameLevel,micLevel,desktopLevel;
     private double replayMinutes=30,memoryPercent=60;
     private double videoBitrateMbps=60;
+    private double burstSeconds=5,burstDamage=250,fastBurstSeconds=2,fastBurstDamage=150;
     private string videoResolution="source",videoCodec="hevc",videoPreset="p6",theme="auto";
-    private bool ready,running,retry,micNoiseSuppression=true;
+    private bool ready,running,retry,startWithWindows,micNoiseSuppression=true;
     private string gameAudioStatus="未采集",micAudioStatus="未采集",desktopAudioStatus="未采集";
     private System.Windows.Media.Brush statusBrush=new SolidColorBrush(System.Windows.Media.Color.FromRgb(115,131,153));
     public string OutputDirectory { get=>output;set{if(Set(ref output,value)){Changed(nameof(OutputDisplay));SettingsChanged?.Invoke();}} }
     public string OutputDisplay => string.IsNullOrWhiteSpace(output)?"未选择":output;
     public string MicrophoneId { get=>mic;set{if(Set(ref mic,value??""))SettingsChanged?.Invoke();} }
     public bool MicNoiseSuppression {get=>micNoiseSuppression;set{if(Set(ref micNoiseSuppression,value))SettingsChanged?.Invoke();}}
+    public bool StartWithWindows {get=>startWithWindows;set{if(Set(ref startWithWindows,value))SettingsChanged?.Invoke();}}
+    public double BurstSeconds {get=>burstSeconds;set{if(double.IsFinite(value)&&Set(ref burstSeconds,Math.Clamp(Math.Round(value,1),1,15))){FastBurstSeconds=fastBurstSeconds;SettingsChanged?.Invoke();}}}
+    public double BurstDamage {get=>burstDamage;set{if(double.IsFinite(value)&&Set(ref burstDamage,Math.Clamp(Math.Round(value),50,2000)))SettingsChanged?.Invoke();}}
+    public double FastBurstSeconds {get=>fastBurstSeconds;set{if(double.IsFinite(value)&&Set(ref fastBurstSeconds,Math.Clamp(Math.Round(value,1),.5,BurstSeconds)))SettingsChanged?.Invoke();}}
+    public double FastBurstDamage {get=>fastBurstDamage;set{if(double.IsFinite(value)&&Set(ref fastBurstDamage,Math.Clamp(Math.Round(value),0,1000)))SettingsChanged?.Invoke();}}
     public double VideoBitrateMbps {get=>videoBitrateMbps;set{if(Set(ref videoBitrateMbps,Math.Clamp(Math.Round(value),10,200)))SettingsChanged?.Invoke();}}
     public string VideoResolution {get=>videoResolution;set{if(Set(ref videoResolution,value is "source" or "1080p" or "1440p" or "2160p"?value:"source")){Changed(nameof(VideoSummary));SettingsChanged?.Invoke();}}}
     public string VideoCodec {get=>videoCodec;set{if(Set(ref videoCodec,value=="h264"?"h264":"hevc")){Changed(nameof(VideoSummary));SettingsChanged?.Invoke();}}}
@@ -99,7 +105,7 @@ public sealed class ViewModel : INotifyPropertyChanged
     public bool Retry {get=>retry;set{if(Set(ref retry,value))Changed(nameof(RetryVisibility));}}
     public System.Windows.Visibility RetryVisibility=>retry?System.Windows.Visibility.Visible:System.Windows.Visibility.Collapsed;
     public ObservableCollection<Microphone> Microphones {get;}=[new("","默认通信设备")];
-    public object Settings()=>new {outputDirectory=OutputDirectory,microphoneId=MicrophoneId,micNoiseSuppression=MicNoiseSuppression,videoResolution=VideoResolution,videoCodec=VideoCodec,videoBitrateMbps=VideoBitrateMbps,videoPreset=VideoPreset,shortPre=ShortPre,shortPost=ShortPost,longPre=LongPre,longPost=LongPost,balance=Balance,controllerFire="LB",replayMinutes=ReplayMinutes,memoryPercent=MemoryPercent,theme=Theme};
+    public object Settings()=>new {outputDirectory=OutputDirectory,microphoneId=MicrophoneId,micNoiseSuppression=MicNoiseSuppression,videoResolution=VideoResolution,videoCodec=VideoCodec,videoBitrateMbps=VideoBitrateMbps,videoPreset=VideoPreset,shortPre=ShortPre,shortPost=ShortPost,longPre=LongPre,longPost=LongPost,balance=Balance,controllerFire="LB",replayMinutes=ReplayMinutes,memoryPercent=MemoryPercent,theme=Theme,startWithWindows=StartWithWindows,burstSeconds=BurstSeconds,burstDamage=BurstDamage,fastBurstSeconds=FastBurstSeconds,fastBurstDamage=FastBurstDamage};
     public void Load(JsonElement s)
     {
         if(s.TryGetProperty("outputDirectory",out var o))OutputDirectory=o.GetString()??"";
@@ -117,5 +123,10 @@ public sealed class ViewModel : INotifyPropertyChanged
         if(s.TryGetProperty("replayMinutes",out var f))ReplayMinutes=f.GetDouble();
         if(s.TryGetProperty("memoryPercent",out var g))MemoryPercent=g.GetDouble();
         if(s.TryGetProperty("theme",out var t))Theme=t.GetString()??"auto";
+        if(s.TryGetProperty("startWithWindows",out var startup))StartWithWindows=startup.GetBoolean();
+        if(s.TryGetProperty("burstSeconds",out var window))BurstSeconds=window.GetDouble();
+        if(s.TryGetProperty("burstDamage",out var damage))BurstDamage=damage.GetDouble();
+        if(s.TryGetProperty("fastBurstSeconds",out var fastWindow))FastBurstSeconds=fastWindow.GetDouble();
+        if(s.TryGetProperty("fastBurstDamage",out var fastDamage))FastBurstDamage=fastDamage.GetDouble();
     }
 }

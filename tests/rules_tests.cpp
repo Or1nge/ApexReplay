@@ -1,5 +1,6 @@
 #include "../src/native/rules.hpp"
 #include "../src/native/memory_policy.hpp"
+#include "../src/native/hud_results.hpp"
 #include <iostream>
 #include <stdexcept>
 using namespace apex;
@@ -8,7 +9,7 @@ CombatEvent kd(double t,const char* target) { return {t,ResultKind::Knockdown,ta
 void burst(RuleEngine& r,double t,unsigned mag=1) { r.damage({t,80,mag,true}); r.damage({t+.5,90,mag,true}); }
 int main() {
     int passed=0;
-    auto test=[&](const char* name,auto body) { body(); ++passed; std::cout<<"PASS "<<name<<'\n'; };
+    auto test=[&](const char* name,auto body) {try{body();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception& e){std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';throw;}};
     test("single spectacular knockdown no longer exports a short",[]{ RuleEngine r; burst(r,10); r.result(kd(11,"A")); r.tick(31); require(r.takeReady().empty(),"single burst exported a short"); });
     test("ordinary single discarded",[]{ RuleEngine r; r.damage({10,20,1,true}); r.result(kd(11,"A")); r.tick(31); require(r.takeReady().empty(),"ordinary kill saved"); });
     test("five kills across squads, long chase excluded",[]{ RuleEngine r; for(int i=0;i<5;++i) { burst(r,10+i*3,i+1); auto name=std::to_string(i); r.result(kd(11+i*3,name.c_str())); } r.tick(50); auto c=r.takeReady(); require(c.size()==1 && c[0].kills==5 && c[0].kind=="multikill" && c[0].end==28,"five kill merge / pursuit tail"); });
@@ -28,5 +29,24 @@ int main() {
     test("wipe before one result does not fabricate a long clip",[]{RuleEngine r;burst(r,10);r.result({11,ResultKind::SquadWipe,"","",1});r.result(kd(11.1,"A"));r.tick(32);require(r.takeReady().empty(),"wipe fabricated another kill");});
     test("single-result final segment stays part of the long fight",[]{RuleEngine r;for(int i=0;i<11;++i){burst(r,10+i*8,i+1);auto target=std::to_string(i);r.result(kd(11+i*8,target.c_str()));}r.tick(120);auto clips=r.takeReady();require(clips.size()==2&&clips[1].kills==1&&clips[1].kind=="multikill","split long fight lost its final segment");require(std::abs(clips[0].end-clips[1].start-2)<.001,"split tail lost overlap");});
     test("forced stop discards an isolated burst",[]{RuleEngine r;burst(r,9);r.result(kd(10,"A"));r.boundary(11);require(r.takeReady().empty(),"stopping exported a short burst");});
+    test("late named OCR after a dropout remains one knockdown",[]{ResultPrompts prompts;prompts.process({},0);
+        auto row=[](const char* text){OcrRead p;p.lines={text};return p;};
+        prompts.process(row("击倒+150"),10);auto first=prompts.process(row("击倒+150"),10.1);require(first.events.size()==1,"unknown result missing");
+        prompts.process({},10.5);auto named=prompts.process(row("击倒+150"),11.7,"艾许8455");require(named.events.empty()&&named.aliases.size()==1&&named.aliases[0].first==first.events[0].target,"late feed identity counted twice");
+        require(prompts.process(row("击倒+150"),11.8).events.empty(),"named result reverted to another unknown");
+        prompts.process(row("击倒琉雀3963+150"),15);auto second=prompts.process(row("击倒琉雀3963+150"),15.1);require(second.events.size()==1,"real second result suppressed");});
+    test("prompt at capture startup is a baseline",[]{ResultPrompts prompts;OcrRead row;row.lines={"击倒old-enemy+150"};require(prompts.process(row,0,{},100).events.empty(),"startup prompt counted");require(prompts.process(row,.2,{},100).events.empty(),"startup prompt repeated");row.lines={"击倒new-enemy+150"};prompts.process(row,1,{},300);require(prompts.process(row,1.1,{},300).events.size()==1,"new named result lost after baseline");});
+    test("known to unknown and one-character junk stay one result",[]{ResultPrompts prompts;prompts.process({},0);OcrRead row;row.lines={"击倒也许只有你+150"};prompts.process(row,10);require(prompts.process(row,10.1).events.size()==1,"named result missing");for(auto text:{"击倒+150","击倒即","击倒护盾"}){row.lines={text};require(prompts.process(row,11).events.empty(),"OCR corruption fabricated an opponent");}});
+    test("rapid different named results with fresh damage are retained",[]{ResultPrompts prompts;prompts.process({},0);OcrRead row;row.lines={"击倒first-enemy+150"};prompts.process(row,10,{},100);require(prompts.process(row,10.1,{},100).events.size()==1,"first result missing");row.lines={"击倒second-enemy+150"};prompts.process(row,10.4,{},200);require(prompts.process(row,10.5,{},200).events.size()==1,"rapid second result missing");});
+    test("stable cropped name fragments do not add opponents",[]{ResultPrompts prompts;prompts.process({},0);OcrRead row;row.lines={"击倒+150"};prompts.process(row,15,{},233);auto first=prompts.process(row,15.1,{},233);require(first.events.size()==1,"first result missing");
+        for(auto name:{"只有你","也许只有你","只有"}){row.lines={std::string("击倒")+name+"+150"};auto a=prompts.process(row,16,{},233);auto b=prompts.process(row,16.1,{},233);require(a.events.empty()&&b.events.empty(),"stable OCR fragment duplicated result");}});
+    test("assist label lost by OCR cannot become another knockdown",[]{ResultPrompts prompts;prompts.process({},0);OcrRead row;row.lines={"助攻，击倒TACTICAL_NOPE+100"};prompts.process(row,10,{},308);require(prompts.process(row,10.1,{},308).events.size()==1,"assist missing");row.lines={"击倒TACTICAL_NOPE+100"};require(prompts.process(row,10.4,{},308).events.empty()&&prompts.process(row,10.5,{},308).events.empty(),"missing assist prefix became an own knockdown");});
+    test("restored assist label corrects a prior mistaken knockdown",[]{ResultPrompts prompts;prompts.process({},0);RuleEngine r;OcrRead row;row.lines={"击倒TACTICAL_NOPE+100"};prompts.process(row,10,{},308);auto first=prompts.process(row,10.1,{},308);require(first.events.size()==1,"initial result missing");r.result(first.events[0]);row.lines={"助攻，击倒TACTICAL_NOPE+100"};prompts.process(row,10.3,{},308);auto restored=prompts.process(row,10.4,{},308);require(restored.corrections.size()==1&&restored.events.empty(),"restored assist was not corrected");for(auto& correction:restored.corrections)r.correctResult(correction.first,correction.second);r.result(kd(17,"another-enemy"));r.tick(37);require(r.takeReady().empty(),"assist inflated a two-opponent clip");});
+    test("five second total AND strict two second burst save an assist",[]{RuleEngine r;r.damage({10,80,1,false});r.damage({11,80,2,true});r.damage({14.9,90,3,false});r.result({15,ResultKind::Assist,"A","",1});r.tick(35);auto c=r.takeReady();require(c.size()==1&&c[0].kind=="burst"&&c[0].kills==0,"high-damage assist rejected across reloads or ability damage");});
+    test("exactly 150 in two seconds does not qualify",[]{RuleEngine r;r.damage({10,75,1,true});r.damage({11,75,1,true});r.damage({14.9,100,2,true});r.result({15,ResultKind::Assist,"A","",1});r.tick(35);require(r.takeReady().empty(),"strict >150 boundary ignored");});
+    test("fast damage alone does not satisfy the five second total",[]{RuleEngine r;r.damage({10,200,1,true});r.result({11,ResultKind::Assist,"A","",1});r.tick(31);require(r.takeReady().empty(),"OR used instead of AND");});
+    test("damage outside the five second window is excluded",[]{RuleEngine r;r.damage({10,160,1,true});r.damage({15.1,90,2,true});r.result({15.2,ResultKind::Assist,"A","",1});r.tick(36);require(r.takeReady().empty(),"old damage inflated window");});
+    test("high damage needs an own result and single knockdown is eligible",[]{RuleEngine r;r.damage({10,160,1,true});r.damage({14,90,2,true});r.tick(35);require(r.takeReady().empty(),"pure damage exported");r.result(kd(14.1,"A"));r.tick(35);auto c=r.takeReady();require(c.size()==1&&c[0].kills==1&&c[0].kind=="burst","qualified single knockdown missing");});
+    test("configured thresholds affect the next result",[]{RuleEngine r;r.updateThresholds(6,300,1.5,160);r.damage({10,161,1,true});r.damage({15.8,139,2,true});r.result({16,ResultKind::Assist,"A","",1});r.tick(36);require(r.takeReady().size()==1,"settings ignored");});
     std::cout<<passed<<" rule scenarios passed\n";
 }
