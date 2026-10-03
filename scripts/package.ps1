@@ -1,4 +1,4 @@
-param([switch]$SkipBuild)
+param([switch]$SkipBuild,[string]$Version='0.2.0-preview')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path $PSScriptRoot -Parent
 if(!$SkipBuild){& (Join-Path $PSScriptRoot 'build.ps1')}
@@ -18,7 +18,7 @@ foreach($taskLicense in 'LICENSE.txt','ThirdPartyNotices.txt'){
 $taskFiles=Get-ChildItem -LiteralPath $taskPackage -Recurse -File | Where-Object Name -ne 'PACKAGE-MANIFEST.json' | ForEach-Object {
     @{path=[IO.Path]::GetRelativePath($taskPackage,$_.FullName);bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 }
-@{name='Apex回放';version='0.1.0-preview';builtUtc=[DateTime]::UtcNow.ToString('O');architecture='win-x64';files=@($taskFiles)} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $taskPackage 'PACKAGE-MANIFEST.json') -Encoding utf8
+@{name='Apex回放';version=$Version;builtUtc=[DateTime]::UtcNow.ToString('O');architecture='win-x64';files=@($taskFiles)} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $taskPackage 'PACKAGE-MANIFEST.json') -Encoding utf8
 $taskZip=Join-Path $taskRoot 'dist\Apex回放-win-x64.zip'
 Compress-Archive -LiteralPath $taskPackage -DestinationPath $taskZip -Force -CompressionLevel Optimal
 Get-Item -LiteralPath $taskZip | Select-Object FullName,Length

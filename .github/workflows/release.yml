@@ -1,0 +1,45 @@
+# Builds the Windows package on a hosted runner and publishes it as a GitHub release.
+# Push a tag such as v0.2.0-preview; release notes are read from .github/release-notes/<tag>.md
+# (first line "# title", the rest is the body).
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare .tools (MSVC, FFmpeg 8.1 LGPL shared, .NET 10)
+        run: |
+          $tools=Join-Path $PWD '.tools'
+          New-Item -ItemType Directory -Force -Path (Join-Path $tools 'msvc'),(Join-Path $tools 'ffmpeg-extract') | Out-Null
+          $vs=& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if(!$vs){throw 'Visual Studio C++ tools not found'}
+          Set-Content -LiteralPath (Join-Path $tools 'msvc\setup_x64.bat') -Value ('@call "'+(Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat')+'"') -Encoding ascii
+          Invoke-WebRequest 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip' -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip (Join-Path $tools 'ffmpeg-extract')
+          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile dotnet-install.ps1
+          ./dotnet-install.ps1 -Channel 10.0 -InstallDir (Join-Path $tools 'dotnet')
+      - name: Build and run rule / native tests
+        run: ./scripts/build.ps1
+      - name: Package
+        run: ./scripts/package.ps1 -SkipBuild -Version ('${{ github.ref_name }}'.TrimStart('v'))
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag='${{ github.ref_name }}'
+          $zip="dist/ApexReplay-$tag-win-x64.zip"
+          Move-Item -LiteralPath 'dist/Apex回放-win-x64.zip' -Destination $zip
+          $hash=(Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath 'dist/SHA256SUMS.txt' -Value "$hash  $(Split-Path $zip -Leaf)" -Encoding ascii
+          $notes=Get-Content -LiteralPath ".github/release-notes/$tag.md" -Encoding utf8
+          $title=$notes[0].TrimStart('#',' ')
+          Set-Content -LiteralPath 'dist/notes.md' -Value ($notes | Select-Object -Skip 1) -Encoding utf8
+          gh release create $tag $zip 'dist/SHA256SUMS.txt' --title $title --notes-file 'dist/notes.md' --prerelease

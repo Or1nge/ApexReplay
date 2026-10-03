@@ -2,7 +2,7 @@
 
 本地 Windows Apex 自动素材采集器。WPF 界面、C++ 工作进程、Windows 窗口与进程音频采集、GPU 缩放及 H.264 / H.265 NVENC 编码。无需管理员权限、云服务或大模型。
 
-[下载 Windows 运行包](https://github.com/Or1nge/ApexReplay/releases/tag/v0.1.0-preview)。要求 Windows 11、支持 NVENC 的 NVIDIA 显卡和可用的中文 Windows OCR。解压整个 ZIP 后即可运行，无需另外安装 .NET。
+[下载 Windows 运行包](https://github.com/Or1nge/ApexReplay/releases)。要求 Windows 11、支持 NVENC 的 NVIDIA 显卡和可用的中文 Windows OCR。解压整个 ZIP 后即可运行，无需另外安装 .NET。
 
 ## 使用
 
