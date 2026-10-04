@@ -1,4 +1,4 @@
-param([switch]$SkipBuild,[string]$Version='0.4.0-preview')
+param([switch]$SkipBuild,[string]$Version='0.5.0-preview')
 $ErrorActionPreference='Stop'
 $taskRoot=Split-Path $PSScriptRoot -Parent
 if(!$SkipBuild){& (Join-Path $PSScriptRoot 'build.ps1')}
