@@ -79,6 +79,8 @@ public partial class MainWindow : Window
             model.Clips.Add(new(@"G:\ApexHighlights\c.mp4",now.AddMinutes(-47),77L<<20,4,65));
             model.Clips.Add(new(@"G:\ApexHighlights\d.mp4",now.AddDays(-1),33L<<20,2));
             model.ApplyAudioLevels([.12,.04,0],[true,true,true]);
+            model.DeveloperMode=true;model.CanSaveReplay=true;model.HudLine="伤害 1194 · 击杀 5 · 助攻 1";
+            model.DevLogPath=@"G:\ApexHighlights\开发者记录\Apex_dev_20261003_213000_000_4242_0.json";
             model.StatusBrush=GoodBrush;
             themeClock.Stop();
             void Snapshot(string path)
@@ -104,7 +106,7 @@ public partial class MainWindow : Window
             var expected=Path.Combine(Path.GetDirectoryName(settingsPath)!,"素材 保存目录");
             if(args[3]=="write")
             {
-                model.OutputDirectory=expected;model.MicrophoneId="test-microphone";model.MicNoiseSuppression=false;
+                model.OutputDirectory=expected;model.MicrophoneId="test-microphone";model.MicNoiseSuppression=false;model.DeveloperMode=true;
                 model.ShortPre=7;model.ShortPost=4;model.LongPre=13;model.LongPost=8;model.Balance=-3;model.ReplayMinutes=42;model.MemoryPercent=45;
                 model.VideoResolution="1080p";model.VideoCodec="h264";model.VideoBitrateMbps=75;model.VideoPreset="p4";model.Theme="light";
                 model.BurstSeconds=6;model.BurstDamage=300;model.FastBurstSeconds=1.5;model.FastBurstDamage=160;model.StartWithWindows=true;
@@ -114,7 +116,7 @@ public partial class MainWindow : Window
                 using var ready=JsonDocument.Parse(args[3]=="read-missing"?"{\"type\":\"ready\",\"microphones\":[]}":"{\"type\":\"ready\",\"microphones\":[{\"id\":\"test-microphone\",\"name\":\"测试麦克风\"}]}");
                 Receive(ready.RootElement);await Task.Delay(100);
             }
-            bool restored=model.OutputDirectory==expected&&model.MicrophoneId=="test-microphone"&&!model.MicNoiseSuppression&&
+            bool restored=model.OutputDirectory==expected&&model.MicrophoneId=="test-microphone"&&!model.MicNoiseSuppression&&model.DeveloperMode&&
                 model.ShortPre==7&&model.ShortPost==4&&model.LongPre==13&&model.LongPost==8&&model.Balance==-3&&model.ReplayMinutes==42&&model.MemoryPercent==45&&
                 model.VideoResolution=="1080p"&&model.VideoCodec=="h264"&&model.VideoBitrateMbps==75&&model.VideoPreset=="p4"&&model.Theme=="light"&&
                 model.BurstSeconds==6&&model.BurstDamage==300&&model.FastBurstSeconds==1.5&&model.FastBurstDamage==160&&model.StartWithWindows;
@@ -136,7 +138,7 @@ public partial class MainWindow : Window
         }
         client=new WorkerClient();
         client.Message+=message=>Dispatcher.BeginInvoke(()=>Receive(message));
-        client.Failed+=message=>Dispatcher.BeginInvoke(()=>{model.Ready=false;model.Running=false;model.ResetAudio("连接中断");Error(message);});
+        client.Failed+=message=>Dispatcher.BeginInvoke(()=>{model.Ready=false;model.Running=false;model.CanSaveReplay=false;model.ResetAudio("连接中断");Error(message);});
         try{
             await client.StartAsync();if(integration)await IntegrationSmokeAsync(args[2]);
             else {
@@ -179,6 +181,8 @@ public partial class MainWindow : Window
     {
         var menu=new Forms.ContextMenuStrip();
         menu.Items.Add("打开 Apex回放",null,(_,_)=>Dispatcher.Invoke(()=>{ShowInTaskbar=true;Show();WindowState=WindowState.Normal;Activate();}));
+        var save=menu.Items.Add("保存全部缓存",null,(_,_)=>Dispatcher.Invoke(()=>SaveReplay_Click(this,new RoutedEventArgs())));save.Enabled=model.CanSaveReplay;
+        model.PropertyChanged+=(_,e)=>{if(e.PropertyName==nameof(ViewModel.CanSaveReplay))save.Enabled=model.CanSaveReplay;};
         menu.Items.Add("停止采集",null,async(_,_)=>{if(client is not null)try{await client.SendAsync("stop");}catch(Exception error){Error(error.Message);}});
         menu.Items.Add("退出",null,(_,_)=>Dispatcher.Invoke(ExitAsync));
         using(var resource=System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/Assets/apex-replay.ico")).Stream)
@@ -229,6 +233,18 @@ public partial class MainWindow : Window
             if(model.Running){await client.SendAsync("stop");return;}
             await StartCaptureAsync();
         }
+        catch(Exception error){Error(error.Message);}
+    }
+    private async void SaveReplay_Click(object sender,RoutedEventArgs e)
+    {
+        if(client is null||!model.CanSaveReplay)return;
+        model.CanSaveReplay=false;
+        try{await client.SendAsync("save_replay");}catch(Exception error){Error(error.Message);}
+    }
+    private void OpenDevFolder_Click(object sender,RoutedEventArgs e)
+    {
+        try{if(string.IsNullOrWhiteSpace(model.OutputDirectory))return;var directory=Path.Combine(model.OutputDirectory,"开发者记录");
+            Directory.CreateDirectory(directory);Process.Start(new ProcessStartInfo("explorer.exe"){UseShellExecute=true,ArgumentList={directory}});}
         catch(Exception error){Error(error.Message);}
     }
     private void NumberInput_KeyDown(object sender,System.Windows.Input.KeyEventArgs e)
@@ -294,6 +310,12 @@ public partial class MainWindow : Window
         else if(type=="status")
         {
             string state=message.GetProperty("state").GetString()??"";
+            model.CanSaveReplay=message.TryGetProperty("canSaveReplay",out var canSave)&&canSave.GetBoolean();
+            model.DevLogPath=message.TryGetProperty("devLogPath",out var logPath)?logPath.GetString()??"":"";
+            if(message.TryGetProperty("hud",out var hud)){
+                string Number(string key)=>hud.TryGetProperty(key,out var n)&&n.ValueKind==JsonValueKind.Number?n.GetInt32().ToString():"—";
+                model.HudLine=$"伤害 {Number("damage")} · 击杀 {Number("kills")} · 助攻 {Number("assists")}";
+            }
             model.Running=state!="stopped";
             if(state is "waiting" or "starting" or "stopping" or "stopped")model.ResetAudio(state switch {"waiting"=>"等待 Apex","starting"=>"正在连接","stopping"=>"正在停止",_=>"未采集"});
             if(state=="stopped")model.ResetBuffer();
@@ -348,6 +370,15 @@ public partial class MainWindow : Window
             AddClip(SavedClip.FromFile(new FileInfo(path),seconds,wipe));
             if(!model.Running)model.StatusTitle="已停止";
         }
+        else if(type=="manual_save")
+        {
+            var state=message.GetProperty("state").GetString();
+            if(state is "queued" or "busy"){model.CanSaveReplay=false;model.StatusDetail="正在保存全部缓存";}
+            else if(state=="saved")model.StatusDetail="全部缓存已保存";
+            else if(state=="unavailable"){model.CanSaveReplay=false;model.StatusDetail="当前没有可保存的缓存";}
+            else if(state=="failed")Error(message.TryGetProperty("message",out var error)?error.GetString()??"手动保存失败":"手动保存失败");
+        }
+        else if(type=="devlog_error"){model.DevLogError=message.GetProperty("message").GetString()??"开发者记录已停用";Error(model.DevLogError);}
         else if(type=="audio_status")
         {
             int track=message.GetProperty("track").GetInt32();
@@ -357,7 +388,7 @@ public partial class MainWindow : Window
         else if(type is "fatal" or "error" or "export_failed")
         {
             Error(message.GetProperty("message").GetString()??"采集失败");
-            if(type=="fatal"){model.Running=false;model.ResetAudio("采集已中断");}if(type=="export_failed")model.Retry=true;
+            if(type=="fatal"){model.Running=false;model.CanSaveReplay=false;model.ResetAudio("采集已中断");}if(type=="export_failed"&&(!message.TryGetProperty("retryable",out var retryable)||retryable.GetBoolean()))model.Retry=true;
         }
     }
 }

@@ -22,6 +22,10 @@ try {
         if($LASTEXITCODE -ne 0){throw 'Rule tests compilation failed.'}
         & (Join-Path $taskBuild 'rules_tests.exe')
         if($LASTEXITCODE -ne 0){throw 'Rule scenario tests failed.'}
+        & cl.exe /nologo /std:c++20 /EHsc /O2 /utf-8 /MD (Join-Path $taskRoot 'tests\hud_tests.cpp') ('/Fe:'+(Join-Path $taskBuild 'hud_tests.exe'))
+        if($LASTEXITCODE -ne 0){throw 'HUD tests compilation failed.'}
+        & (Join-Path $taskBuild 'hud_tests.exe') $taskRoot
+        if($LASTEXITCODE -ne 0){throw 'HUD scenario tests failed.'}
         & cl.exe /nologo /std:c++20 /EHsc /O2 /utf-8 /MD (Join-Path $taskRoot 'tests\speech_tests.cpp') ('/Fe:'+(Join-Path $taskBuild 'speech_tests.exe'))
         if($LASTEXITCODE -ne 0){throw 'Speech leveling tests compilation failed.'}
         & (Join-Path $taskBuild 'speech_tests.exe')

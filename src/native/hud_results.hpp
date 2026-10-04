@@ -1,5 +1,6 @@
 #pragma once
 #include "rules.hpp"
+#include "names.hpp"
 #include "hud_attribution.hpp"
 #include <array>
 #include <cctype>
@@ -20,14 +21,6 @@ class ResultPrompts {
     bool seeded_=false;
     static constexpr double dropoutSeconds=2.5;
     static bool contains(const std::string& text,const char* word){return text.find(word)!=std::string::npos;}
-    static std::vector<unsigned> characters(const std::string& text){
-        std::vector<unsigned> out;
-        for(size_t i=0;i<text.size();){unsigned c=static_cast<unsigned char>(text[i++]);
-            if(c<128){c=unsigned(std::tolower(int(c)));if(c=='i'||c=='l')c='1';if(c=='0')c='o';}
-            else{int count=(c&0xe0)==0xc0?1:(c&0xf0)==0xe0?2:3;c&=count==1?0x1f:count==2?0x0f:0x07;while(count--&&i<text.size())c=(c<<6)|(static_cast<unsigned char>(text[i++])&0x3f);}
-            out.push_back(c);
-        }return out;
-    }
     static std::optional<ResultKind> classify(const std::string& text){
         if(contains(text,"小队全灭")||contains(text,"SQUADELIMINATED"))return ResultKind::SquadWipe;
         bool assist=contains(text,"助攻")||contains(text,"协助")||contains(text,"ASSIST");
@@ -44,7 +37,7 @@ class ResultPrompts {
         return text;
     }
     static bool readable(const std::string& text){
-        if(characters(text).size()<2)return false;
+        if(nameCharacters(text).size()<2)return false;
         for(auto word:{"造成","伤害","护盾","正在","坏蛋","该死","ASSIST"})if(contains(text,word))return false;
         bool letter=false;for(unsigned char c:text)letter|=c>=128||std::isalpha(c);return letter;
     }
@@ -52,13 +45,6 @@ class ResultPrompts {
 public:
     struct Read {std::vector<CombatEvent> events;std::vector<std::pair<std::string,std::string>> aliases;std::vector<std::pair<std::string,ResultKind>> corrections;};
     void reset(){banners_={};nextId_=0;seeded_=false;}
-    static bool similarTarget(const std::string& a,const std::string& b){
-        auto x=characters(a),y=characters(b);if(x==y)return true;
-        if(std::min(x.size(),y.size())>=2&&(std::search(x.begin(),x.end(),y.begin(),y.end())!=x.end()||std::search(y.begin(),y.end(),x.begin(),x.end())!=y.end()))return true;
-        if(std::min(x.size(),y.size())<4||std::abs(int(x.size())-int(y.size()))>1)return false;
-        std::vector<int> previous(y.size()+1),current(y.size()+1);for(size_t j=0;j<previous.size();++j)previous[j]=int(j);
-        for(size_t i=0;i<x.size();++i){current[0]=int(i)+1;for(size_t j=0;j<y.size();++j)current[j+1]=std::min({previous[j+1]+1,current[j]+1,previous[j]+(x[i]!=y[j])});previous.swap(current);}return previous.back()<=1;
-    }
     Read process(const OcrRead& prompt,double time,const std::string& ownFeedTarget={},std::optional<int> totalDamage={}){
         Read read;
         for(const auto& line:prompt.lines){

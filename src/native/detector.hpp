@@ -4,6 +4,7 @@
 #include "digits.hpp"
 #include "hud_attribution.hpp"
 #include "hud_results.hpp"
+#include "hud_tracking.hpp"
 #include <regex>
 #include <xinput.h>
 namespace apex {
@@ -42,30 +43,17 @@ public:
         bitmap.Close();return out;
     }
 };
-struct Observation {
-    double time=0;bool active=false,firing=false,reload=false,hitFeedback=false;
-    std::optional<int> ammo,totalDamage;std::string weapon,status,prompt,playerName,ownFeedTarget;
-    unsigned magazine=1;int damageDelta=0;std::vector<CombatEvent> events;
-    std::vector<std::pair<std::string,std::string>> targetAliases;
-    std::vector<std::pair<std::string,ResultKind>> resultCorrections;
-    json toJson()const {
-        json eventsJson=json::array();for(const auto& e:events)eventsJson.push_back(eventJson(e));
-        json out{{"time",time},{"active",active},{"firing",firing},{"reload",reload},{"hitFeedback",hitFeedback},
-            {"weapon",weapon},{"magazine",magazine},{"damageDelta",damageDelta},{"status",status},{"prompt",prompt},{"events",eventsJson},{"playerName",playerName},{"ownFeedTarget",ownFeedTarget},{"targetAliases",targetAliases},{"resultCorrections",resultCorrections}};
-        out["ammo"]=ammo?json(*ammo):json(nullptr);out["totalDamage"]=totalDamage?json(*totalDamage):json(nullptr);return out;
-    }
-};
 class HudDetector {
-    LocalOcr ocr_;std::optional<int> ammo_,damage_,pendingDamage_;
-    int baselineHits_=0,resetHits_=0;std::optional<int> lowerDamage_;
-    double shotAt_=-100,damageAt_=0,lastActive_=0,stateReadAt_=-100;
+    LocalOcr ocr_;std::optional<int> ammo_;
+    DamageTracker damage_;CounterTracker kills_,assists_;
+    double shotAt_=-100,lastActive_=0,stateReadAt_=-100;
     unsigned magazine_=1;std::string weapon_,stateText_;
     std::optional<int> risingAmmo_;std::string changingWeapon_;
     OwnFeedAttribution attribution_;double nameReadAt_=-100,feedReadAt_=-100;
     ResultPrompts results_;
 public:
     std::string language()const{return ocr_.language();}
-    void reset(){ammo_.reset();risingAmmo_.reset();damage_.reset();pendingDamage_.reset();lowerDamage_.reset();baselineHits_=resetHits_=0;magazine_=1;weapon_.clear();changingWeapon_.clear();results_.reset();shotAt_=-100;lastActive_=0;stateReadAt_=-100;stateText_.clear();attribution_.reset();nameReadAt_=feedReadAt_=-100;}
+    void reset(){ammo_.reset();risingAmmo_.reset();damage_.reset();kills_.reset();assists_.reset();magazine_=1;weapon_.clear();changingWeapon_.clear();results_.reset();shotAt_=-100;lastActive_=0;stateReadAt_=-100;stateText_.clear();attribution_.reset();nameReadAt_=feedReadAt_=-100;}
     Observation process(const std::array<CpuImage,8>& images,double time,bool controllerFire=false) {
         Observation obs;obs.time=time;
         obs.ammo=HudDigits::read(cropCpu(images[2],{.578,.193,.130,.223}),2,true);
@@ -86,37 +74,45 @@ public:
         obs.magazine=magazine_;obs.firing=time-shotAt_<=.8 || controllerFire;
         auto score=ocr_.read(images[0],true);
         obs.totalDamage=HudDigits::read(cropCpu(images[0],{.520,.637,.142,.126}));
+        // Kills, assists and damage share one right-aligned row; it also stands in for an unreadable damage crop.
+        auto counters=HudDigits::readRow(cropCpu(images[0],{.050,.593,.624,.193}));
+        if(!obs.totalDamage)obs.totalDamage=counters.damage;
         if(obs.totalDamage&&*obs.totalDamage>20000)obs.totalDamage.reset();
+        obs.kills=counters.kills;obs.assists=counters.assists;obs.countersHidden=counters.hidden;
         if(time-stateReadAt_>=1){
             stateText_=ocr_.read(images[3]).text+" "+ocr_.read(images[4]).text;stateReadAt_=time;
         }
-        bool excluded=false;
+        // The Peacekeeper (和平捍卫者) is a weapon name in pickup prompts and the inventory, not the Champion banner.
+        auto state=stateText_;for(size_t at;(at=state.find("和平捍卫者"))!=std::string::npos;)state.erase(at,std::char_traits<char>::length("和平捍卫者"));
         for(auto text:{"观战","死亡回放","死亡回顾","捍卫者","你已成为","比赛总结","射击场","SPECTATE","DEATHRECAP","CHAMPION","FIRINGRANGE"})
-            excluded|=has(stateText_,text);
+            if(obs.excludedBy.empty()&&has(state,text))obs.excludedBy=text;
+        bool excluded=!obs.excludedBy.empty();
         bool battleLayout=has(stateText_,"剩余小队")||has(score.text,"剩余小队")||has(score.text,"SQUADSLEFT");
         // Damage digits and enemy bars can be hidden independently of the player's HUD.
         // The weapon/ammo HUD and battle layout establish context; result prompts remain usable.
         obs.active=obs.ammo.has_value()&&battleLayout&&!excluded;
         obs.status=excluded?"非本人战斗画面":obs.active?(obs.totalDamage?"HUD 已识别":"HUD 已识别 · 伤害数字不可读"):"等待战斗画面";
-        if(!obs.totalDamage){damage_.reset();pendingDamage_.reset();lowerDamage_.reset();baselineHits_=resetHits_=0;}
         if(obs.active){
             if(time-nameReadAt_>=.5){attribution_.observeName(ocr_.read(images[6]));nameReadAt_=time;}
-            if(time-feedReadAt_>=.3){attribution_.observeFeed(ocr_.read(images[7]),time);feedReadAt_=time;}
+            if(time-feedReadAt_>=.3){auto feed=ocr_.read(images[7]);obs.feed=attribution_.observeFeed(feed,time,&images[7]);obs.feedRead=true;
+                for(const auto& line:feed.lines)obs.feedText+=(obs.feedText.empty()?"":" | ")+line;feedReadAt_=time;}
             obs.playerName=attribution_.playerName();if(auto target=attribution_.recentTarget(time))obs.ownFeedTarget=*target;
         }
-        // A monotonic, repeated scoreboard reading is the only source of damage quantities.
-        // XP / reward numbers in the center prompt never enter this path.
-        if(obs.active&&obs.totalDamage){
-            int current=*obs.totalDamage;
-            if(!damage_){if(pendingDamage_&&*pendingDamage_==current)++baselineHits_;else{pendingDamage_=current;baselineHits_=1;}if(baselineHits_>=3){damage_=current;pendingDamage_.reset();}}
-            else if(current<*damage_ && *damage_-current>100){if(lowerDamage_&&*lowerDamage_==current)++resetHits_;else{lowerDamage_=current;resetHits_=1;}
-                if(resetHits_>=3){reset();obs.status="伤害计数重置，开始新对局";obs.active=false;}}
-            else if(current>*damage_ && current-*damage_<=500){
-                if(pendingDamage_ && current>=*pendingDamage_ && time-damageAt_<=1){
-                    obs.damageDelta=current-*damage_;damage_=current;pendingDamage_.reset();
-                }else {pendingDamage_=current;damageAt_=time;}
-            }else if(current==*damage_){pendingDamage_.reset();lowerDamage_.reset();resetHits_=0;}
-            lastActive_=time;
+        // A monotonic, repeated counter reading is the only source of damage quantities; the last confirmed
+        // value survives frames where the rolling number cannot be read. XP / reward numbers in the center
+        // prompt never enter this path.
+        if(obs.active){
+            auto change=damage_.observe(obs.totalDamage,time);
+            if(change.reset){reset();obs.status="伤害计数重置，开始新对局";obs.active=false;}
+            else{
+                obs.damageDelta=change.delta;obs.damageAt=change.at;obs.damageSince=change.since;obs.damageBaseline=change.baseline;
+                // The kills and assists box is absent until the first kill or assist of the match.
+                auto kills=kills_.observe(counters.hidden?std::optional<int>(0):counters.kills),assists=assists_.observe(counters.hidden?std::optional<int>(0):counters.assists);
+                if(kills&&!kills->baseline)obs.killDelta=kills->to-kills->from;
+                if(assists&&!assists->baseline)obs.assistDelta=assists->to-assists->from;
+                lastActive_=time;
+            }
+            obs.confirmedDamage=damage_.value();obs.killCount=kills_.value();obs.assistCount=assists_.value();
         }
         size_t colored=0;
         for(size_t i=0;i+3<images[5].bgra.size();i+=4){int b=images[5].bgra[i],g=images[5].bgra[i+1],r=images[5].bgra[i+2];
@@ -141,24 +137,5 @@ public:
         }
         return false;
     }
-};
-class ObservationRules {
-    RuleEngine rules_;double inactiveSince_=-1;bool active_=false;
-public:
-    explicit ObservationRules(Rules rules):rules_(std::move(rules)){}
-    RuleEngine& rules(){return rules_;}
-    bool process(const Observation& observation){
-        bool cut=false;
-        if(observation.active){active_=true;inactiveSince_=-1;
-            for(const auto& alias:observation.targetAliases)rules_.resolveTarget(alias.first,alias.second);
-            for(const auto& correction:observation.resultCorrections)rules_.correctResult(correction.first,correction.second);
-            if(observation.damageDelta>0)rules_.damage({observation.time,observation.damageDelta,observation.magazine,observation.firing});
-            for(const auto& event:observation.events)rules_.result(event);
-        }else if(active_){if(inactiveSince_<0)inactiveSince_=observation.time;
-            if(observation.time-inactiveSince_>=2||has(observation.status,"重置")){boundary(observation.time);cut=true;}}
-        rules_.tick(observation.time);
-        return cut;
-    }
-    void boundary(double time){rules_.boundary(time);active_=false;inactiveSince_=-1;}
 };
 }

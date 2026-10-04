@@ -1,0 +1,60 @@
+# Builds and tests the Windows package on a hosted runner for every branch push and uploads it as a
+# workflow artifact. Nothing is published; releases stay in release.yml (tag pushes).
+name: Build
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare .tools (MSVC, FFmpeg 8.1 LGPL shared, .NET 10)
+        run: |
+          $tools=Join-Path $PWD '.tools'
+          New-Item -ItemType Directory -Force -Path (Join-Path $tools 'msvc'),(Join-Path $tools 'ffmpeg-extract') | Out-Null
+          $vs=& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if(!$vs){throw 'Visual Studio C++ tools not found'}
+          Set-Content -LiteralPath (Join-Path $tools 'msvc\setup_x64.bat') -Value ('@call "'+(Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat')+'"') -Encoding ascii
+          Invoke-WebRequest 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip' -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip (Join-Path $tools 'ffmpeg-extract')
+          Invoke-WebRequest 'https://dot.net/v1/dotnet-install.ps1' -OutFile dotnet-install.ps1
+          ./dotnet-install.ps1 -Channel 10.0 -InstallDir (Join-Path $tools 'dotnet')
+      - name: Build and run rule / HUD / speech / native tests
+        run: ./scripts/build.ps1
+      - name: Package
+        run: ./scripts/package.ps1 -SkipBuild -Version ('ci-'+'${{ github.sha }}'.Substring(0,7))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ApexReplay-win-x64-${{ github.sha }}
+          path: dist/Apex回放
+          retention-days: 14
+      # The hosted runner has no Apex, GPU encoder or audio devices; these checks only cover what it can run.
+      - name: Settings smoke test
+        continue-on-error: true
+        run: ./tests/settings-smoke.ps1
+      - name: Worker pipe smoke test
+        continue-on-error: true
+        run: ./tests/ipc-smoke.ps1
+      - name: Interface screenshots
+        continue-on-error: true
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/ui | Out-Null
+          $process=Start-Process -FilePath 'dist/Apex回放/Apex回放.exe' -ArgumentList @('--ui-smoke',('"'+(Join-Path $PWD 'artifacts/ui/ui.png')+'"')) -PassThru
+          if(!$process.WaitForExit(60000)){$process.Kill();throw 'Interface screenshots timed out'}
+          Get-ChildItem artifacts/ui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots-${{ github.sha }}
+          path: artifacts/ui
+          retention-days: 14
+          if-no-files-found: ignore

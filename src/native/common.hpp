@@ -32,7 +32,9 @@
 #include <sstream>
 #include <thread>
 #include "json.hpp"
+#include "image.hpp"
 #include "rules.hpp"
+#include "observation.hpp"
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -58,15 +60,6 @@ inline std::string errorText() {
     try { throw; } catch(const winrt::hresult_error& e) { return winrt::to_string(e.message())+" (0x"+[] (uint32_t c){std::ostringstream s;s<<std::hex<<c;return s.str();}(e.code())+")"; }
     catch(const std::exception& e) {return e.what();} catch(...) { return "Unknown native error"; }
 }
-inline json eventJson(const CombatEvent& e) {
-    constexpr const char* kinds[]={"knockdown","elimination","assist","squad_wipe"};
-    return {{"time",e.time},{"kind",kinds[static_cast<int>(e.kind)]},{"target",e.target},{"confidence",e.confidence},{"evidence",e.evidence}};
-}
-inline json clipJson(const ClipPlan& c) {
-    json events=json::array(); for(const auto& e:c.events)events.push_back(eventJson(e));
-    return {{"start",c.start},{"end",c.end},{"kind",c.kind},{"kills",c.kills},{"ruleVersion",c.version},
-        {"squadWipe",c.squadWipe},{"truncated",c.truncated},{"events",events}};
-}
 inline Rules loadRules(const std::filesystem::path& p) {
     Rules r; if(!std::filesystem::exists(p))return r;
     auto j=json::parse(std::ifstream(p));
@@ -86,7 +79,7 @@ struct Settings {
     double shortPre=5,shortPost=3,longPre=10,longPost=5,balance=0;
     double replayMinutes=30,memoryPercent=60;
     double burstSeconds=5,burstDamage=250,fastBurstSeconds=2,fastBurstDamage=150;
-    bool micNoiseSuppression=true;
+    bool micNoiseSuppression=true,developerMode=false;
     std::string videoResolution="source",videoCodec="hevc",videoPreset="p6";
     double videoBitrateMbps=60;
     static Settings fromJson(const json& j) {
@@ -94,6 +87,7 @@ struct Settings {
         s.outputDirectory=j.value("outputDirectory",std::string());
         s.microphoneId=j.value("microphoneId",std::string());
         s.micNoiseSuppression=j.value("micNoiseSuppression",true);
+        s.developerMode=j.value("developerMode",false);
         s.videoResolution=j.value("videoResolution",std::string("source"));s.videoCodec=j.value("videoCodec",std::string("hevc"));s.videoPreset=j.value("videoPreset",std::string("p6"));
         if(s.videoResolution!="source"&&s.videoResolution!="1080p"&&s.videoResolution!="1440p"&&s.videoResolution!="2160p")throw std::runtime_error("Unsupported video resolution");
         if(s.videoCodec!="hevc"&&s.videoCodec!="h264")throw std::runtime_error("Unsupported video codec");
@@ -109,19 +103,14 @@ struct Settings {
         return s;
     }
 };
+inline json settingsJson(const Settings& s){
+    return {{"outputDirectory",s.outputDirectory},{"microphoneId",s.microphoneId},{"controllerFire",s.controllerFire},{"shortPre",s.shortPre},{"shortPost",s.shortPost},{"longPre",s.longPre},{"longPost",s.longPost},
+        {"balance",s.balance},{"replayMinutes",s.replayMinutes},{"memoryPercent",s.memoryPercent},{"burstSeconds",s.burstSeconds},{"burstDamage",s.burstDamage},{"fastBurstSeconds",s.fastBurstSeconds},{"fastBurstDamage",s.fastBurstDamage},
+        {"micNoiseSuppression",s.micNoiseSuppression},{"developerMode",s.developerMode},{"videoResolution",s.videoResolution},{"videoCodec",s.videoCodec},{"videoPreset",s.videoPreset},{"videoBitrateMbps",s.videoBitrateMbps}};
+}
 inline std::pair<int,int> videoDimensions(HWND window,const Settings& settings){
     if(settings.videoResolution=="1080p")return {1920,1080};if(settings.videoResolution=="1440p")return {2560,1440};if(settings.videoResolution=="2160p")return {3840,2160};
     RECT rect{};if(!window||!GetClientRect(window,&rect)||rect.right<640||rect.bottom<360)return {1920,1080};
     return {std::max(2,int(rect.right)&~1),std::max(2,int(rect.bottom)&~1)};
-}
-struct CpuImage { int width=0,height=0;std::vector<uint8_t> bgra; };
-struct Region { double x,y,w,h; };
-inline CpuImage cropCpu(const CpuImage& image,Region r) {
-    int x=int(r.x*image.width),y=int(r.y*image.height);
-    CpuImage out{std::max(1,int(r.w*image.width)),std::max(1,int(r.h*image.height)),{}};
-    out.width=std::min(out.width,image.width-x);out.height=std::min(out.height,image.height-y);
-    out.bgra.resize(size_t(out.width)*out.height*4);
-    for(int row=0;row<out.height;++row) memcpy(out.bgra.data()+size_t(row)*out.width*4,image.bgra.data()+(size_t(row+y)*image.width+x)*4,size_t(out.width)*4);
-    return out;
 }
 }

@@ -22,6 +22,7 @@ public sealed class ViewModel : INotifyPropertyChanged
     private double videoBitrateMbps=60;
     private double burstSeconds=5,burstDamage=250,fastBurstSeconds=2,fastBurstDamage=150;
     private string videoResolution="source",videoCodec="hevc",videoPreset="p6",theme="auto";
+    private bool developerMode,canSaveReplay;private string hudLine="伤害 — · 击杀 — · 助攻 —",devLogPath="",devLogError="";
     private bool ready,running,retry,startWithWindows,micNoiseSuppression=true;
     private string gameAudioStatus="未采集",micAudioStatus="未采集",desktopAudioStatus="未采集",micVoice="",desktopVoice="";
     private readonly DateTime[] lastSpeech=new DateTime[3];
@@ -30,6 +31,12 @@ public sealed class ViewModel : INotifyPropertyChanged
     public string OutputDisplay => string.IsNullOrWhiteSpace(output)?"未选择":output;
     public string MicrophoneId { get=>mic;set{if(Set(ref mic,value??""))SettingsChanged?.Invoke();} }
     public bool MicNoiseSuppression {get=>micNoiseSuppression;set{if(Set(ref micNoiseSuppression,value))SettingsChanged?.Invoke();}}
+    public bool DeveloperMode {get=>developerMode;set{if(Set(ref developerMode,value)){if(value)DevLogError="";Changed(nameof(DeveloperVisibility));SettingsChanged?.Invoke();}}}
+    public System.Windows.Visibility DeveloperVisibility=>DeveloperMode?System.Windows.Visibility.Visible:System.Windows.Visibility.Collapsed;
+    public bool CanSaveReplay {get=>canSaveReplay;set=>Set(ref canSaveReplay,value);}
+    public string HudLine {get=>hudLine;set=>Set(ref hudLine,value);}
+    public string DevLogPath {get=>devLogPath;set=>Set(ref devLogPath,value);}
+    public string DevLogError {get=>devLogError;set=>Set(ref devLogError,value);}
     public bool StartWithWindows {get=>startWithWindows;set{if(Set(ref startWithWindows,value))SettingsChanged?.Invoke();}}
     public double BurstSeconds {get=>burstSeconds;set{if(double.IsFinite(value)&&Set(ref burstSeconds,Math.Clamp(Math.Round(value,1),1,15))){FastBurstSeconds=fastBurstSeconds;SettingsChanged?.Invoke();}}}
     public double BurstDamage {get=>burstDamage;set{if(double.IsFinite(value)&&Set(ref burstDamage,Math.Clamp(Math.Round(value),50,2000)))SettingsChanged?.Invoke();}}
@@ -119,15 +126,16 @@ public sealed class ViewModel : INotifyPropertyChanged
         string size=bytes>=1024d*1024*1024?$"{bytes/Math.Pow(1024,3):0.0} GiB":$"{bytes/(1024*1024):0} MiB";
         MemoryLine=budgetBytes>0?$"{size} · 内存上限 {budgetBytes/Math.Pow(1024,3):0.0} GiB":size;
     }
-    public void ResetBuffer(){bufferSeconds=0;Changed(nameof(BufferProgress));BufferTime="0:00";MemoryLine="";CaptureSize=null;}
+    public void ResetBuffer(){CanSaveReplay=false;DevLogPath="";HudLine="伤害 — · 击杀 — · 助攻 —";bufferSeconds=0;Changed(nameof(BufferProgress));BufferTime="0:00";MemoryLine="";CaptureSize=null;}
     public bool Retry {get=>retry;set{if(Set(ref retry,value))Changed(nameof(RetryVisibility));}}
     public System.Windows.Visibility RetryVisibility=>retry?System.Windows.Visibility.Visible:System.Windows.Visibility.Collapsed;
     public ObservableCollection<Microphone> Microphones {get;}=[new("","默认通信设备")];
-    public object Settings()=>new {outputDirectory=OutputDirectory,microphoneId=MicrophoneId,micNoiseSuppression=MicNoiseSuppression,videoResolution=VideoResolution,videoCodec=VideoCodec,videoBitrateMbps=VideoBitrateMbps,videoPreset=VideoPreset,shortPre=ShortPre,shortPost=ShortPost,longPre=LongPre,longPost=LongPost,balance=Balance,controllerFire="LB",replayMinutes=ReplayMinutes,memoryPercent=MemoryPercent,theme=Theme,startWithWindows=StartWithWindows,burstSeconds=BurstSeconds,burstDamage=BurstDamage,fastBurstSeconds=FastBurstSeconds,fastBurstDamage=FastBurstDamage};
+    public object Settings()=>new {outputDirectory=OutputDirectory,microphoneId=MicrophoneId,micNoiseSuppression=MicNoiseSuppression,developerMode=DeveloperMode,videoResolution=VideoResolution,videoCodec=VideoCodec,videoBitrateMbps=VideoBitrateMbps,videoPreset=VideoPreset,shortPre=ShortPre,shortPost=ShortPost,longPre=LongPre,longPost=LongPost,balance=Balance,controllerFire="LB",replayMinutes=ReplayMinutes,memoryPercent=MemoryPercent,theme=Theme,startWithWindows=StartWithWindows,burstSeconds=BurstSeconds,burstDamage=BurstDamage,fastBurstSeconds=FastBurstSeconds,fastBurstDamage=FastBurstDamage};
     public void Load(JsonElement s)
     {
         if(s.TryGetProperty("outputDirectory",out var o))OutputDirectory=o.GetString()??"";
         if(s.TryGetProperty("microphoneId",out var m))MicrophoneId=m.GetString()??"";
+        if(s.TryGetProperty("developerMode",out var dev))DeveloperMode=dev.GetBoolean();
         if(s.TryGetProperty("micNoiseSuppression",out var noise))MicNoiseSuppression=noise.GetBoolean();
         if(s.TryGetProperty("videoResolution",out var resolution))VideoResolution=resolution.GetString()??"source";
         if(s.TryGetProperty("videoCodec",out var codec))VideoCodec=codec.GetString()??"hevc";

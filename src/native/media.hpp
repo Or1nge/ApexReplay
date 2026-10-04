@@ -1,17 +1,23 @@
 #pragma once
 #include "common.hpp"
 #include "memory_policy.hpp"
+#include "devlog.hpp"
 namespace apex {
 struct Packet {
     AVPacket* data=nullptr; AVRational timebase{}; int stream=0; double time=0;
-    static inline std::atomic<uint64_t> liveBytes=0;
+    static inline std::atomic<uint64_t> liveBytes=0,exportingBytes=0;
+    static inline std::recursive_mutex memoryMutex;std::atomic<unsigned> manualRefs=0;
+    void retainManual(){std::lock_guard lock(memoryMutex);if(manualRefs.fetch_add(1)==0)exportingBytes+=data->size;}
+    void releaseManual(){std::lock_guard lock(memoryMutex);if(manualRefs.fetch_sub(1)==1)exportingBytes-=data->size;}
+    static uint64_t cacheCharge(){std::lock_guard lock(memoryMutex);auto exporting=exportingBytes.load(),live=liveBytes.load();return live-std::min(live,exporting);}
     Packet(const AVPacket* p,int s,AVRational tb):data(av_packet_clone(p)),timebase(tb),stream(s) {
-        if(!data)throw std::bad_alloc();time=(data->pts==AV_NOPTS_VALUE?data->dts:data->pts)*av_q2d(tb);liveBytes+=data->size;
+        if(!data)throw std::bad_alloc();std::lock_guard lock(memoryMutex);time=(data->pts==AV_NOPTS_VALUE?data->dts:data->pts)*av_q2d(tb);liveBytes+=data->size;
     }
-    ~Packet(){liveBytes-=data->size;av_packet_free(&data);}
+    ~Packet(){std::lock_guard lock(memoryMutex);liveBytes-=data->size;av_packet_free(&data);}
 };
 using PacketRef=std::shared_ptr<Packet>;
 class PacketRing {
+    friend struct PacketRingTestAccess;
     mutable std::mutex mutex_;std::deque<PacketRef> packets_;uint64_t bytes_=0;
     double latest_=0,latestVideo_=0,videoSegmentStart_=0,maxSeconds_=1800,pinStart_=-1,lastBudgetRefresh_=-100;bool hasKey_=false;
     double memoryPercent_=60;uint64_t budget_=8ull<<30,idleBytes_=0;std::array<double,4> latestStream_{};
@@ -36,23 +42,32 @@ public:
         if(packets_.back()->stream==0){if(packets_.back()->time-latestVideo_>.5)videoSegmentStart_=packets_.back()->time;latestVideo_=std::max(latestVideo_,packets_.back()->time);}
         double target=latest_-maxSeconds_;if(pinStart_>=0)target=std::min(target,pinStart_);
         while(keys_.size()>1&&keys_[1]<=target)dropBefore(keys_[1]);
-        if(Packet::liveBytes>budget_){while(keys_.size()>1&&Packet::liveBytes>budget_*.9){
+        if(std::max(bytes_,Packet::cacheCharge())>budget_){while(keys_.size()>1&&std::max(bytes_,Packet::cacheCharge())>budget_*.9){
             double next=keys_[1];if(pinStart_>=0&&next>pinStart_)break;dropBefore(next);}}
-        if(Packet::liveBytes>budget_)throw std::runtime_error("缓存及待导出素材达到当前内存上限，已暂停采集。请重试失败的保存或降低缓存设置。");
+        if(std::max(bytes_,Packet::cacheCharge())>budget_)throw std::runtime_error("缓存及待导出素材达到当前内存上限，已暂停采集。请重试失败的保存或降低缓存设置。");
     }
-    std::vector<PacketRef> snapshot(double start,double end,double& actualStart)const {
-        std::lock_guard lock(mutex_);actualStart=-1;
-        double oldest=keys_.empty()?-1:keys_.front();for(double key:keys_)if(key<=start)actualStart=key;else break;
-        if(actualStart<0)actualStart=oldest;
-        if(actualStart<0 || actualStart>=end)throw std::runtime_error("回放缓存中尚无可解码片段");
+    std::vector<PacketRef> snapshot(double start,double end,double& actualStart,bool manual=false)const {
         std::vector<PacketRef> result;
-        for(const auto& p:packets_)if(p->time+1e-6>=actualStart && p->time<=end)result.push_back(p);
+        {
+            std::lock_guard lock(mutex_);actualStart=-1;
+            double oldest=keys_.empty()?-1:keys_.front();for(double key:keys_)if(key<=start)actualStart=key;else break;
+            if(actualStart<0)actualStart=oldest;
+            if(actualStart<0 || actualStart>=end)throw std::runtime_error("回放缓存中尚无可解码片段");
+            for(const auto& p:packets_)if(p->time+1e-6>=actualStart && p->time<=end){
+                if(manual){
+                    // Each alias owns one export reference, also released if a queued job fails or is cancelled.
+                    p->retainManual();
+                    PacketRef alias(p.get(),[held=p](Packet*)mutable{std::lock_guard lock(Packet::memoryMutex);held->releaseManual();held.reset();});result.push_back(std::move(alias));
+                }else result.push_back(p);
+            }
+        }
         std::sort(result.begin(),result.end(),[](const auto& a,const auto& b){
             double ta=a->data->dts*av_q2d(a->timebase),tb=b->data->dts*av_q2d(b->timebase);
             return ta==tb?a->stream<b->stream:ta<tb;
         });
         return result;
     }
+    double earliestKey()const{std::lock_guard lock(mutex_);return keys_.empty()?-1:keys_.front();}
     uint64_t bytes()const{std::lock_guard lock(mutex_);return bytes_;}
     double duration()const{std::lock_guard lock(mutex_);return packets_.empty()?0:latest_-packets_.front()->time;}
     double latest()const{std::lock_guard lock(mutex_);return latest_;}
@@ -160,11 +175,11 @@ struct CodecSet {
     std::array<AVCodecParameters*,4> parameters{};std::array<AVRational,4> timebases{};
     ~CodecSet(){for(auto& p:parameters)avcodec_parameters_free(&p);}
 };
-struct ExportJob {ClipPlan clip;double actualStart=0;std::vector<PacketRef> packets;std::shared_ptr<CodecSet> codecs;std::filesystem::path file;};
+struct ExportJob {ClipPlan clip;double actualStart=0,epoch=0;std::vector<PacketRef> packets;std::shared_ptr<CodecSet> codecs;std::filesystem::path file;std::shared_ptr<DevRecorder> recorder;json devSlice;void packetWritten(PacketRef& packet){if(clip.kind=="manual")packet.reset();}};
 class ExportQueue {
     std::mutex mutex_;std::condition_variable_any cv_;std::deque<ExportJob> queued_,failed_;
-    std::jthread thread_;std::function<void(json)> notify_;std::atomic<bool> busy_=false;
-    static void write(const ExportJob& job) {
+    std::jthread thread_;std::function<void(json)> notify_;std::atomic<bool> busy_=false;std::atomic<unsigned> manualPending_=0;
+    static void write(ExportJob& job) {
         auto partial=job.file;partial+=L".partial.mp4";
         AVFormatContext* out=nullptr;ffcheck(avformat_alloc_output_context2(&out,nullptr,"mp4",pathUtf8(partial).c_str()),"create MP4 muxer");
         try {
@@ -179,13 +194,14 @@ class ExportQueue {
             ffcheck(avio_open(&out->pb,pathUtf8(partial).c_str(),AVIO_FLAG_WRITE),"open output directory");
             AVDictionary* opts=nullptr;av_dict_set(&opts,"movflags","+faststart",0);int h=avformat_write_header(out,&opts);av_dict_free(&opts);ffcheck(h,"write MP4 header");
             std::array<bool,4> present{};
-            for(const auto& packet:job.packets){
+            for(auto& packet:job.packets){
                 AVPacket* p=av_packet_clone(packet->data);if(!p)throw std::bad_alloc();
                 int i=packet->stream;p->stream_index=i;
                 av_packet_rescale_ts(p,packet->timebase,out->streams[i]->time_base);
                 auto offset=av_rescale_q(static_cast<int64_t>(std::llround(job.actualStart*1000000)),AVRational{1,1000000},out->streams[i]->time_base);
                 p->pts-=offset;p->dts-=offset;
                 if(p->pts>=0 && p->dts>=0){int ret=av_interleaved_write_frame(out,p);av_packet_free(&p);ffcheck(ret,"write clip packet");present[i]=true;}else av_packet_free(&p);
+                job.packetWritten(packet);
             }
             for(bool yes:present)if(!yes)throw std::runtime_error("片段缺少视频或音轨，暂不发布为正式文件");
             ffcheck(av_write_trailer(out),"finalize MP4");ffcheck(avio_closep(&out->pb),"close MP4");avformat_free_context(out);out=nullptr;
@@ -201,17 +217,25 @@ public:
             for(;;){
                 ExportJob job;
                 {std::unique_lock lock(mutex_);cv_.wait(lock,stop,[&]{return !queued_.empty();});if(queued_.empty()){if(stop.stop_requested())break;continue;}job=std::move(queued_.front());queued_.pop_front();}
-                busy_=true;
-                try{write(job);notify_({{"type","saved"},{"path",pathUtf8(job.file)},{"clip",clipJson(job.clip)}});}
-                catch(...){auto error=errorText();{std::lock_guard lock(mutex_);failed_.push_back(std::move(job));}notify_({{"type","export_failed"},{"message",error}});}
-                busy_=false;
+                busy_=true;bool manual=job.clip.kind=="manual";
+                try{write(job);
+                    if(job.recorder){auto sidecar=job.file;sidecar.replace_extension(L".json");job.recorder->writeSlice(sidecar,job.devSlice);}
+                    if(manual){if(job.recorder)job.recorder->append({{"type","manual_save"},{"t",qpcSeconds()-job.epoch},{"state","saved"},{"path",pathUtf8(job.file)}});notify_({{"type","manual_save"},{"state","saved"},{"path",pathUtf8(job.file)}});}
+                    notify_({{"type","saved"},{"path",pathUtf8(job.file)},{"clip",clipJson(job.clip)}});}
+                catch(...){auto error=errorText();
+                    // A manual export has already released the packets it wrote, so it cannot be retried.
+                    if(manual){job.packets.clear();if(job.recorder)job.recorder->append({{"type","manual_save"},{"t",qpcSeconds()-job.epoch},{"state","failed"},{"detail","手动保存失败："+error}});
+                        notify_({{"type","manual_save"},{"state","failed"},{"message","手动保存失败："+error}});notify_({{"type","export_failed"},{"message",error},{"retryable",false}});}
+                    else{{std::lock_guard lock(mutex_);failed_.push_back(std::move(job));}notify_({{"type","export_failed"},{"message",error}});}}
+                if(manual)--manualPending_;busy_=false;
             }
         });
     }
     ~ExportQueue(){thread_.request_stop();cv_.notify_all();if(thread_.joinable())thread_.join();}
-    void push(ExportJob job){{std::lock_guard lock(mutex_);queued_.push_back(std::move(job));}cv_.notify_one();}
+    void push(ExportJob job){{std::lock_guard lock(mutex_);bool manual=job.clip.kind=="manual";queued_.push_back(std::move(job));if(manual)++manualPending_;}cv_.notify_one();}
     void retry(){{std::lock_guard lock(mutex_);while(!failed_.empty()){queued_.push_back(std::move(failed_.front()));failed_.pop_front();}}cv_.notify_one();}
     size_t failures(){std::lock_guard lock(mutex_);return failed_.size();}
+    bool manualBusy()const{return manualPending_.load()>0;}
     bool busy()const{return busy_;}
 };
 }

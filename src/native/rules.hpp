@@ -8,9 +8,11 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "names.hpp"
 
 namespace apex {
 enum class ResultKind { Knockdown, Elimination, Assist, SquadWipe };
+inline const char* resultKindName(ResultKind kind){constexpr const char* names[]={"knockdown","elimination","assist","squad_wipe"};return names[static_cast<int>(kind)];}
 struct Rules {
     std::string version = "apex-zh-v3-results";
     double burstDamage=250, burstSeconds=5, fastBurstDamage=150, fastBurstSeconds=2;
@@ -27,12 +29,24 @@ struct CombatEvent {
 };
 struct DamageSample { double time=0; int damage=0; unsigned magazine=0; bool firing=false; };
 struct Burst { double start=0,end=0; int damage=0; };
+// Best damage windows before a result, kept for diagnostics even when the criteria are not met.
+struct BurstStats { int sum=0,peak=0; bool qualified=false; double start=0,end=0; };
 struct ClipPlan {
     double start=0,end=0;
     std::string kind,version;
     std::vector<CombatEvent> events;
     bool truncated=false, squadWipe=false;
     size_t kills=0;
+    std::string reason;
+};
+// One rule decision, reported to the developer log.
+struct RuleNote {
+    double time=0;
+    std::string what,detail,target;
+    std::optional<ResultKind> kind;
+    size_t opponents=0;
+    std::optional<BurstStats> burst;
+    std::optional<ClipPlan> clip;
 };
 class RuleEngine {
     struct Candidate {
@@ -40,15 +54,19 @@ class RuleEngine {
         bool longContinuation=false, squadWipe=false,highDamage=false;
         std::set<std::string> opponents;
         std::vector<CombatEvent> events;
+        int bestSum=0,bestPeak=0;
     };
+    struct Knock { double time=0; bool finished=false; };
     Rules rules_;
     std::deque<DamageSample> damage_;
     std::optional<Candidate> candidate_;
-    std::unordered_map<std::string,double> knocked_;
+    std::unordered_map<std::string,Knock> knocked_;
     std::unordered_map<std::string,double> seen_;
     std::optional<double> splitStart_;
     std::vector<ClipPlan> ready_;
     double lastWipe_=-100;
+    std::function<void(RuleNote)> trace_;
+    void note(RuleNote value) const { if (trace_) trace_(std::move(value)); }
     static std::string identity(const CombatEvent& e) {
         return e.target.empty() ? "unknown@"+std::to_string(e.time) : e.target;
     }
@@ -82,6 +100,24 @@ class RuleEngine {
         }
         return meaningful && to-previous<=rules_.bridgeQuietSeconds;
     }
+    // An elimination usually finishes an opponent this player knocked earlier. Both prompts are read
+    // separately, so the names can differ by OCR or be unreadable on either side.
+    std::optional<std::string> knockFinishedBy(const CombatEvent& event,const std::string& target) const {
+        auto open=[&](const Knock& knock){return !knock.finished&&event.time>=knock.time&&event.time-knock.time<300;};
+        if (auto it=knocked_.find(target); it!=knocked_.end() && open(it->second)) return target;
+        std::optional<std::string> unnamed; double newest=-1e9;
+        for (const auto& [name,knock]:knocked_) {
+            if (!open(knock)) continue;
+            bool named=!unnamedTarget(name)&&!unnamedTarget(target);
+            if (named && sameOpponentName(name,target)) return name;
+            if (!named && event.time-knock.time<=90 && knock.time>newest) { unnamed=name; newest=knock.time; }
+        }
+        return unnamed;
+    }
+    std::string discardReason(const Candidate& c) const {
+        return "只有 "+std::to_string(c.opponents.size())+" 名敌人且伤害未达标：5 秒内最高 "+std::to_string(c.bestSum)+"（需 ≥"+std::to_string(int(rules_.burstDamage))+
+            "），2 秒内最高 "+std::to_string(c.bestPeak)+"（需 >"+std::to_string(int(rules_.fastBurstDamage))+"）";
+    }
     void finish(double available,bool forced=false) {
         if (!candidate_) return;
         const auto& c=*candidate_;
@@ -90,13 +126,21 @@ class RuleEngine {
             if (splitStart_) start=std::max(start,*splitStart_);
             double wanted=c.lastResult+rules_.longPost;
             double end=std::min(wanted,available);
-            if (end>start) ready_.push_back({start,end,c.opponents.size()>=2||c.longContinuation?"multikill":"burst",rules_.version,c.events,
-                forced && end<wanted,c.squadWipe,c.opponents.size()});
-        }
+            std::string reason=c.opponents.size()>=2?"连续击倒或淘汰 "+std::to_string(c.opponents.size())+" 名敌人":
+                c.longContinuation?"长镜头分段的后续部分":"高伤害：5 秒内 "+std::to_string(c.bestSum)+"，2 秒内 "+std::to_string(c.bestPeak);
+            if (end>start) {
+                ClipPlan plan{start,end,c.opponents.size()>=2||c.longContinuation?"multikill":"burst",rules_.version,c.events,
+                    forced && end<wanted,c.squadWipe,c.opponents.size(),reason};
+                note({available,"clip_planned",reason,"",{},c.opponents.size(),{},plan});
+                ready_.push_back(std::move(plan));
+            } else note({available,"candidate_discarded","可用画面不足："+reason,"",{},c.opponents.size()});
+        } else note({available,"candidate_discarded",discardReason(c),"",{},c.opponents.size()});
         candidate_.reset(); splitStart_.reset();
     }
 public:
     explicit RuleEngine(Rules rules={}):rules_(std::move(rules)) {}
+    void setTrace(std::function<void(RuleNote)> trace){ trace_=std::move(trace); }
+    const Rules& rules() const { return rules_; }
     void updateTimings(double lp,double lo) {
         rules_.longPre=std::clamp(lp,0.0,30.0); rules_.longPost=std::clamp(lo,0.0,20.0);
     }
@@ -104,29 +148,53 @@ public:
         rules_.burstSeconds=std::clamp(seconds,1.0,15.0);rules_.burstDamage=std::clamp(damage,50.0,2000.0);
         rules_.fastBurstSeconds=std::clamp(fastSeconds,.5,rules_.burstSeconds);rules_.fastBurstDamage=std::clamp(fastDamage,0.0,1000.0);
     }
+    BurstStats burstStats(double time) const {
+        BurstStats best;
+        for(size_t i=0;i<damage_.size();++i){
+            const auto& first=damage_[i];
+            if(first.time>time||time-first.time>rules_.burstSeconds+rules_.resultGraceSeconds)continue;
+            int sum=0,peak=0;double end=first.time;size_t last=i;
+            for(size_t j=i;j<damage_.size();++j){const auto& d=damage_[j];if(d.time-first.time>rules_.burstSeconds||d.time>time)break;sum+=d.damage;end=d.time;last=j;}
+            if(time-end>rules_.resultGraceSeconds)continue;
+            for(size_t j=i;j<=last;++j){int fast=0;for(size_t k=j;k<=last&&damage_[k].time-damage_[j].time<=rules_.fastBurstSeconds;++k)fast+=damage_[k].damage;peak=std::max(peak,fast);}
+            if(sum>best.sum){best.sum=sum;best.start=first.time;best.end=end;}
+            best.peak=std::max(best.peak,peak);
+        }
+        if(auto b=burst(time)){best.qualified=true;best.start=b->start;best.end=b->end;}
+        return best;
+    }
     void damage(DamageSample sample) {
         if (sample.damage<=0 || sample.damage>500 || !std::isfinite(sample.time)) return;
         damage_.push_back(sample);
         while (!damage_.empty() && sample.time-damage_.front().time>120) damage_.pop_front();
     }
     void result(const CombatEvent& event) {
-        if (event.confidence<0.8 || !std::isfinite(event.time)) return;
+        if (event.confidence<0.8 || !std::isfinite(event.time)) { note({event.time,"result_ignored","置信度不足",event.target,event.kind}); return; }
         if (event.kind==ResultKind::SquadWipe) {
             lastWipe_=event.time;
             if (candidate_ && event.time-candidate_->lastResult<=3) candidate_->squadWipe=true;
+            note({event.time,"squad_wipe","小队全灭提示","",event.kind});
             return;
         }
         const std::string target=identity(event);
         const std::string token=std::to_string(static_cast<int>(event.kind))+":"+target;
-        if (seen_.contains(token) && event.time-seen_[token]<30) return;
+        if (seen_.contains(token) && event.time-seen_[token]<30) { note({event.time,"result_duplicate","30 秒内重复的同一结果",target,event.kind}); return; }
         seen_[token]=event.time;
-        if (event.kind==ResultKind::Elimination && knocked_.contains(target) && event.time-knocked_[target]<300) {
-            if (candidate_) candidate_->events.push_back(event);
-            return;
+        if (event.kind==ResultKind::Elimination) {
+            if (auto knock=knockFinishedBy(event,target)) {
+                knocked_[*knock].finished=true;
+                if (candidate_) candidate_->events.push_back(event);
+                note({event.time,"elimination_of_knocked","淘汰的是之前击倒的 "+*knock+"，不重复计人",target,event.kind,candidate_?candidate_->opponents.size():0});
+                if (unnamedTarget(*knock) && !unnamedTarget(target)) resolveTarget(*knock,target);
+                return;
+            }
         }
         auto b=burst(event.time);
-        if(event.kind==ResultKind::Elimination&&!b){for(const auto& [prior,time]:knocked_)if(prior.starts_with("hud-result-")&&event.time-time<300){if(candidate_)candidate_->events.push_back(event);return;}}
-        if (event.kind==ResultKind::Assist && !b) return;
+        auto stats=burstStats(event.time);
+        if (event.kind==ResultKind::Assist && !b) {
+            note({event.time,"assist_ignored","助攻但伤害未达标，不保存","",event.kind,candidate_?candidate_->opponents.size():0,stats});
+            return;
+        }
         tick(event.time);
         if (candidate_) {
             double gap=event.time-candidate_->lastResult;
@@ -147,18 +215,24 @@ public:
                 splitStart_=std::max(0.0,priorEnd-rules_.splitOverlapSeconds);
             }
         }
+        bool fresh=!candidate_;
         if (!candidate_) candidate_=Candidate{action,event.time,continuingLong,false,false,{},{}};
         candidate_->highDamage|=b.has_value();
+        candidate_->bestSum=std::max(candidate_->bestSum,stats.sum);
+        candidate_->bestPeak=std::max(candidate_->bestPeak,stats.peak);
         candidate_->lastResult=event.time;
         candidate_->squadWipe|=event.time-lastWipe_<=3;
         candidate_->events.push_back(event);
         if (event.kind!=ResultKind::Assist) candidate_->opponents.insert(target);
-        if (event.kind==ResultKind::Knockdown) knocked_[target]=event.time;
+        if (event.kind==ResultKind::Knockdown) knocked_[target]=Knock{event.time,false};
+        note({event.time,fresh?"candidate_started":"candidate_extended",
+            std::string(event.kind==ResultKind::Assist?"助攻":"计为敌人 ")+(event.kind==ResultKind::Assist?"":target)+(b?"；伤害达标":"；伤害未达标"),
+            target,event.kind,candidate_->opponents.size(),stats});
     }
     void tick(double now) {
         if (candidate_ && now-candidate_->lastResult>=std::max(rules_.bridgeMergeSeconds,rules_.longPost)) finish(now);
         for (auto it=seen_.begin();it!=seen_.end();) it=now-it->second>300?seen_.erase(it):std::next(it);
-        for (auto it=knocked_.begin();it!=knocked_.end();) it=now-it->second>300?knocked_.erase(it):std::next(it);
+        for (auto it=knocked_.begin();it!=knocked_.end();) it=now-it->second.time>300?knocked_.erase(it):std::next(it);
     }
     void boundary(double available) { finish(available,true); damage_.clear(); knocked_.clear(); seen_.clear();lastWipe_=-100; }
     bool pending() const { return candidate_.has_value(); }

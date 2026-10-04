@@ -19,10 +19,10 @@ public sealed class SavedClip : INotifyPropertyChanged
     public string Duration {get;}
     public bool SquadWipe {get;}
     public ImageSource? Thumbnail {get=>thumbnail;set{thumbnail=value;PropertyChanged?.Invoke(this,new(nameof(Thumbnail)));}}
-    public SavedClip(string path,DateTime time,long bytes,int kills,double seconds=0,bool squadWipe=false,bool highDamage=false)
+    public SavedClip(string path,DateTime time,long bytes,int kills,double seconds=0,bool squadWipe=false,bool highDamage=false,bool manual=false)
     {
         Path=path;SquadWipe=squadWipe;
-        Title=highDamage?(kills>0?$"高伤害 · {kills} 名敌人":"高伤害 · 助攻"):kills>0?$"{kills} 名敌人":"精彩片段";
+        Title=manual?"手动保存":highDamage?(kills>0?$"高伤害 · {kills} 名敌人":"高伤害 · 助攻"):kills>0?$"{kills} 名敌人":"精彩片段";
         var day=(DateTime.Today-time.Date).Days;
         string when=day switch {0=>$"今天 {time:HH:mm}",1=>$"昨天 {time:HH:mm}",_=>time.Year==DateTime.Today.Year?$"{time.Month}月{time.Day}日 {time:HH:mm}":$"{time:yyyy/M/d}"};
         Detail=bytes>0?$"{when} · {Size(bytes)}":when;
@@ -34,7 +34,7 @@ public sealed class SavedClip : INotifyPropertyChanged
     {
         var parts=System.IO.Path.GetFileNameWithoutExtension(file.Name).Split('_');
         int kills=parts.Length>=6&&int.TryParse(parts[5],out var k)?k:0;
-        return new(file.FullName,file.LastWriteTime,file.Exists?file.Length:0,kills,seconds,squadWipe,parts.Length>=5&&parts[4]=="高伤害");
+        return new(file.FullName,file.LastWriteTime,file.Exists?file.Length:0,kills,seconds,squadWipe,parts.Length>=5&&parts[4]=="高伤害",parts.Length>=5&&parts[4]=="手动");
     }
     /// <summary>Newest clips in the output folder; partially written files are skipped.</summary>
     public static List<FileInfo> Scan(string directory,int limit)

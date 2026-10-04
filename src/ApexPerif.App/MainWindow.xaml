@@ -203,13 +203,35 @@
           <TextBlock Text="{Binding MemoryLine}" Style="{StaticResource Subtle}" TextTrimming="CharacterEllipsis"/>
          </DockPanel>
         </Grid>
-        <Button Click="Retry_Click" Visibility="{Binding RetryVisibility}" Margin="30,14,0,0" HorizontalAlignment="Left"
-         Background="{DynamicResource WarnSoftBrush}" BorderBrush="{DynamicResource WarnLineBrush}" Foreground="{DynamicResource WarnBrush}">
-         <StackPanel Orientation="Horizontal">
-          <TextBlock Text="&#xE72C;" Style="{StaticResource IconText}" FontSize="12" Margin="0,0,8,0"/>
-          <TextBlock Text="重试保存"/>
-         </StackPanel>
-        </Button>
+        <!-- Developer mode: live counter readings and the session log file. -->
+        <StackPanel Margin="30,12,0,0" Visibility="{Binding DeveloperVisibility}">
+         <TextBlock Text="{Binding HudLine}" Style="{StaticResource Muted}" Typography.NumeralAlignment="Tabular"/>
+         <TextBlock Text="{Binding DevLogPath}" ToolTip="{Binding DevLogPath}" TextTrimming="CharacterEllipsis" Margin="0,4,0,0">
+          <TextBlock.Style><Style TargetType="TextBlock" BasedOn="{StaticResource Subtle}"><Style.Triggers>
+           <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
+          </Style.Triggers></Style></TextBlock.Style>
+         </TextBlock>
+         <TextBlock Text="{Binding DevLogError}" Foreground="{DynamicResource WarnBrush}" TextWrapping="Wrap" Margin="0,4,0,0">
+          <TextBlock.Style><Style TargetType="TextBlock"><Style.Triggers>
+           <Trigger Property="Text" Value=""><Setter Property="Visibility" Value="Collapsed"/></Trigger>
+          </Style.Triggers></Style></TextBlock.Style>
+         </TextBlock>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Margin="30,14,0,0">
+         <Button Click="SaveReplay_Click" IsEnabled="{Binding CanSaveReplay}" ToolTip="把当前缓存的整段录像保存为一个视频">
+          <StackPanel Orientation="Horizontal">
+           <TextBlock Text="&#xE74E;" Style="{StaticResource IconText}" FontSize="12" Margin="0,0,8,0"/>
+           <TextBlock Text="保存全部缓存"/>
+          </StackPanel>
+         </Button>
+         <Button Click="Retry_Click" Visibility="{Binding RetryVisibility}" Margin="8,0,0,0"
+          Background="{DynamicResource WarnSoftBrush}" BorderBrush="{DynamicResource WarnLineBrush}" Foreground="{DynamicResource WarnBrush}">
+          <StackPanel Orientation="Horizontal">
+           <TextBlock Text="&#xE72C;" Style="{StaticResource IconText}" FontSize="12" Margin="0,0,8,0"/>
+           <TextBlock Text="重试保存"/>
+          </StackPanel>
+         </Button>
+        </StackPanel>
        </StackPanel>
        <StackPanel Grid.Column="1" Margin="28,0,8,0" VerticalAlignment="Center">
         <Button Style="{StaticResource RecordButton}" Click="Start_Click" IsEnabled="{Binding Ready}" ToolTip="{Binding StartButtonText}"/>
@@ -442,6 +464,12 @@
         <Border Style="{StaticResource Rule}"/>
         <Grid Style="{StaticResource Row}"><TextBlock Text="开机自启" VerticalAlignment="Center" ToolTip="登录 Windows 后在托盘启动并自动等待 Apex"/>
          <CheckBox HorizontalAlignment="Right" VerticalAlignment="Center" IsChecked="{Binding StartWithWindows, UpdateSourceTrigger=PropertyChanged}"/></Grid>
+        <Border Style="{StaticResource Rule}"/>
+        <Grid Style="{StaticResource Row}"><TextBlock Text="开发者模式" VerticalAlignment="Center" ToolTip="采集时把伤害、击杀、助攻读数和每次保存判定写成 JSON，片段旁另存同名记录，用于排查漏录和误录"/>
+         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button Content="打开记录文件夹" Click="OpenDevFolder_Click" Visibility="{Binding DeveloperVisibility}" VerticalAlignment="Center" Margin="0,0,16,0"/>
+          <CheckBox VerticalAlignment="Center" IsChecked="{Binding DeveloperMode, UpdateSourceTrigger=PropertyChanged}"/>
+         </StackPanel></Grid>
         <Border Style="{StaticResource Rule}"/>
         <Grid Style="{StaticResource Row}"><TextBlock Text="外观" VerticalAlignment="Center"/>
          <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="{DynamicResource ControlBrush}" CornerRadius="7" Padding="2">

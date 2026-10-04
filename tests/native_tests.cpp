@@ -5,6 +5,9 @@
 using namespace apex;
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 PacketRef sample(double time,bool key=false,int stream=0){auto packet=av_packet_alloc();ffcheck(av_new_packet(packet,8),"test packet");packet->pts=packet->dts=static_cast<int64_t>(time*1000);packet->flags=key?AV_PKT_FLAG_KEY:0;auto ref=std::make_shared<Packet>(packet,stream,AVRational{1,1000});av_packet_free(&packet);return ref;}
+namespace apex {struct PacketRingTestAccess {
+    static void budget(PacketRing& ring,uint64_t bytes){std::lock_guard lock(ring.mutex_);ring.budget_=bytes;ring.lastBudgetRefresh_=qpcSeconds()+3600;}
+};}
 int main(){av_log_set_level(AV_LOG_ERROR);int passed=0;auto test=[&](const char* name,auto body){body();++passed;std::cout<<"PASS "<<name<<'\n';};
     try{
         test("missing damage HUD still permits confirmed multikill results",[]{ObservationRules flow({});Observation observation;
@@ -42,6 +45,21 @@ int main(){av_log_set_level(AV_LOG_ERROR);int passed=0;auto test=[&](const char*
             for(int i=0;i<1901;++i){ring.push(sample(i,true));if(i==200)held=ring.snapshot(100,105,start);}
             require(ring.duration()>=1799&&ring.duration()<=1801,"thirty minute retention incorrect");require(!held.empty()&&held.front()->time==100,"export references lost evicted data");
             auto before=ring.bytes();auto a=ring.snapshot(1820.5,1830,start);auto b=ring.snapshot(1825.5,1840,start);require(!a.empty()&&!b.empty()&&ring.bytes()==before,"overlapping snapshot consumed cache");});
+        test("large manual export releases references while capture keeps arriving",[]{
+            PacketRing ring;ring.configure(1,60);PacketRingTestAccess::budget(ring,800);
+            for(int i=0;i<90;++i)ring.push(sample(i,true));
+            double start;ExportJob job;job.clip.kind="manual";job.packets=ring.snapshot(0,89,start,true);auto& held=job.packets;require(start==29,"manual snapshot did not start at earliest retained keyframe");
+            auto exporting=Packet::exportingBytes.load();require(exporting==held.size()*8,"manual bytes not accounted");
+            for(int i=90;i<150;++i)ring.push(sample(i,true));
+            require(Packet::liveBytes>800&&ring.duration()>=59,"manual export evicted the entire cache");
+            auto live=Packet::liveBytes.load();auto released=Packet::exportingBytes.load();
+            // Exercise the release path used by ExportQueue::write while new encoded packets arrive.
+            for(size_t i=0;i<20;++i){job.packetWritten(held[i]);ring.push(sample(150+i,true));}
+            require(Packet::liveBytes<live,"memory did not fall as exported packets were released");
+            require(Packet::exportingBytes<released,"written packets retained export accounting");
+            held.clear();require(Packet::exportingBytes==0,"manual failure or cancellation leaked export references");
+            ExportJob automatic;auto packet=sample(200,true);automatic.packetWritten(packet);require(bool(packet),"automatic export lost its retry reference");
+        });
         test("candidate pins survive short duration limit",[]{PacketRing ring;ring.configure(1,60);for(int i=0;i<30;++i)ring.push(sample(i,true));ring.pin(20);
             for(int i=30;i<101;++i)ring.push(sample(i,true));double start;auto result=ring.snapshot(20,90,start);require(start==20,"pending candidate lost its history");
             ring.pin({});ring.push(sample(101,true));require(ring.duration()<=61,"released candidate kept growing cache");});

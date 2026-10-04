@@ -57,17 +57,18 @@ int wmain(int argc,wchar_t** argv){
         }
         if(mode!=L"--pipe"||argc<3){std::cout<<"ApexPerif.Worker --pipe NAME | --diagnose | --analyze INPUT OUTPUT.jsonl [START] [SECONDS]\n";return 0;}
         Pipe pipe(argv[2]);auto notify=[&](json j){pipe.send(std::move(j));};ExportQueue exports(notify);
-        std::mutex settingsMutex;Settings settings;std::atomic<bool> armed=false,quit=false,stopAnnouncement=false;std::atomic<unsigned> revision=0;
+        std::mutex settingsMutex;Settings settings;std::atomic<bool> armed=false,quit=false,stopAnnouncement=false,manualRequest=false;std::atomic<unsigned> revision=0;
         std::jthread monitor([&](std::stop_token stop){
             winrt::init_apartment(winrt::apartment_type::multi_threaded);std::unique_ptr<CaptureSession> session;unsigned applied=0;bool waitingAnnounced=false;
             while(!stop.stop_requested()&&!quit){
                 try{
-                    if(!armed){bool announce=stopAnnouncement.exchange(false);if(session||waitingAnnounced||announce){session.reset();notify({{"type","status"},{"state","stopped"}});}waitingAnnounced=false;std::this_thread::sleep_for(100ms);continue;}
+                    if(!armed){if(manualRequest.exchange(false))notify({{"type","manual_save"},{"state","unavailable"}});bool announce=stopAnnouncement.exchange(false);if(session||waitingAnnounced||announce){session.reset();notify({{"type","status"},{"state","stopped"}});}waitingAnnounced=false;std::this_thread::sleep_for(100ms);continue;}
                     auto window=findApex();
                     if(session&&(session->window()!=window.handle || session->failed())){bool failed=session->failed();session.reset();if(failed){armed=false;continue;}}
                     if(!window.handle){if(!waitingAnnounced){notify({{"type","status"},{"state","waiting"}});waitingAnnounced=true;}}
                     else if(!session){Settings copy;{std::lock_guard lock(settingsMutex);copy=settings;}
                         notify({{"type","status"},{"state","starting"}});session=std::make_unique<CaptureSession>(window,config,copy,exports,notify);applied=revision;waitingAnnounced=false;}
+                    if(manualRequest.exchange(false)){if(session)session->requestManualSave();else notify({{"type","manual_save"},{"state","unavailable"}});}
                     if(session&&applied!=revision){Settings copy;{std::lock_guard lock(settingsMutex);copy=settings;}session->update(std::move(copy));applied=revision;}
                 }catch(...){notify({{"type","fatal"},{"message",errorText()}});armed=false;session.reset();}
                 std::this_thread::sleep_for(100ms);
@@ -83,6 +84,7 @@ int wmain(int argc,wchar_t** argv){
                     {std::lock_guard lock(settingsMutex);settings=std::move(next);}++revision;if(command=="start")armed=true;
                 }catch(...){notify({{"type","error"},{"message",errorText()}});}
             }else if(command=="stop"){notify({{"type","status"},{"state","stopping"}});stopAnnouncement=true;armed=false;}
+            else if(command=="save_replay")manualRequest=true;
             else if(command=="retry")exports.retry();
             else if(command=="quit"){quit=true;break;}
         }

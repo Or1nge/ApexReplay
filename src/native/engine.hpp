@@ -32,6 +32,7 @@ inline bool windowHdr(HWND window) {
 class CaptureSession {
     ApexWindow target_;Rules baseRules_;ExportQueue& exports_;std::function<void(json)> notify_;
     std::atomic<std::shared_ptr<Settings>> settings_;
+    std::atomic<std::shared_ptr<DevRecorder>> recorder_;std::atomic<unsigned> devId_=0;bool recorderFailed_=false;
     Gpu gpu_;PacketRing ring_;std::unique_ptr<VideoEncoder> video_;std::array<std::unique_ptr<AudioCapture>,3> audio_;
     std::unique_ptr<WindowCapture> capture_;std::shared_ptr<CodecSet> codecs_;
     double epoch_=0;std::jthread videoThread_,analysisThread_;
@@ -40,19 +41,41 @@ class CaptureSession {
     std::optional<AnalysisFrame> analysisFrame_;
     std::atomic<bool> pending_=false,failed_=false;std::atomic<unsigned> skippedAnalysis_=0,videoFrames_=0,repeatedFrames_=0;
     std::atomic<double> analysisMs_=0;std::atomic<unsigned> exportId_=0;
-    std::string detectionStatus_="等待战斗画面";std::mutex statusMutex_;
+    std::string detectionStatus_="等待战斗画面";std::mutex statusMutex_;json hud_={{"damage",nullptr},{"kills",nullptr},{"assists",nullptr}};
+    void updateRecorder(const Settings& settings){
+        auto current=recorder_.load();if(!settings.developerMode){recorder_.store(nullptr);recorderFailed_=false;return;}if(recorderFailed_)return;
+        if(current){current->retention(settings.replayMinutes*60+120);current->append({{"type","settings"},{"t",qpcSeconds()-epoch_},{"settings",settingsJson(settings)}});return;}
+        SYSTEMTIME now{};GetLocalTime(&now);std::wostringstream name;
+        name<<L"Apex_dev_"<<std::setfill(L'0')<<std::setw(4)<<now.wYear<<std::setw(2)<<now.wMonth<<std::setw(2)<<now.wDay<<L"_"
+            <<std::setw(2)<<now.wHour<<std::setw(2)<<now.wMinute<<std::setw(2)<<now.wSecond<<L"_"<<std::setw(3)<<now.wMilliseconds<<L"_"<<GetCurrentProcessId()<<L"_"<<devId_++<<L".json";
+        // The analysis thread applies the damage criteria and long-clip timings from settings on top of rules.v1.json.
+        const auto& r=baseRules_;
+        json rules{{"version",r.version},{"burstDamage",settings.burstDamage},{"burstSeconds",settings.burstSeconds},{"fastBurstDamage",settings.fastBurstDamage},{"fastBurstSeconds",settings.fastBurstSeconds},
+            {"resultGraceSeconds",r.resultGraceSeconds},{"fastMergeSeconds",r.fastMergeSeconds},{"bridgeMergeSeconds",r.bridgeMergeSeconds},{"bridgeDamage",r.bridgeDamage},{"bridgeDamageSeconds",r.bridgeDamageSeconds},
+            {"bridgeQuietSeconds",r.bridgeQuietSeconds},{"maxClipSeconds",r.maxClipSeconds},{"splitOverlapSeconds",r.splitOverlapSeconds},{"longPre",settings.longPre},{"longPost",settings.longPost}};
+        auto notify=notify_;
+        try{recorder_.store(std::make_shared<DevRecorder>(std::filesystem::path(wide(settings.outputDirectory))/L"开发者记录"/name.str(),
+            json{{"settings",settingsJson(settings)},{"rules",rules},{"hudVersion",HudDigits::version},{"startedAt",qpcSeconds()-epoch_}},
+            settings.replayMinutes*60+120,[notify](std::string message){notify({{"type","devlog_error"},{"message",message}});}));}
+        catch(...){recorderFailed_=true;notify_({{"type","devlog_error"},{"message","开发者记录创建失败，采集继续"}});}
+    }
     void publishClip(ClipPlan clip) {
-        ExportJob job;job.clip=std::move(clip);job.codecs=codecs_;
-        if(job.clip.end>ring_.latestVideo()+1./60){job.clip.end=ring_.latestVideo()+1./60;job.clip.truncated=true;}
-        double segment=ring_.videoSegmentStart();if(job.clip.end>segment&&job.clip.start<segment){job.clip.start=segment;job.clip.truncated=true;}
-        job.packets=ring_.snapshot(job.clip.start,job.clip.end,job.actualStart);
+        ExportJob job;job.epoch=epoch_;job.clip=std::move(clip);job.codecs=codecs_;
+        if(job.clip.kind!="manual"&&job.clip.end>ring_.latestVideo()+1./60){job.clip.end=ring_.latestVideo()+1./60;job.clip.truncated=true;}
+        double segment=ring_.videoSegmentStart();if(job.clip.kind!="manual"&&job.clip.end>segment&&job.clip.start<segment){job.clip.start=segment;job.clip.truncated=true;}
+        job.packets=ring_.snapshot(job.clip.start,job.clip.end,job.actualStart,job.clip.kind=="manual");
         if(job.actualStart>job.clip.start+.02)job.clip.truncated=true;
         auto settings=settings_.load();auto directory=std::filesystem::path(wide(settings->outputDirectory));
         SYSTEMTIME now{};GetLocalTime(&now);
         std::wostringstream name;name<<L"Apex_"<<std::setfill(L'0')<<std::setw(4)<<now.wYear<<std::setw(2)<<now.wMonth<<std::setw(2)<<now.wDay<<L"_"
             <<std::setw(2)<<now.wHour<<std::setw(2)<<now.wMinute<<std::setw(2)<<now.wSecond<<L"_"<<std::setw(3)<<now.wMilliseconds
-            <<L"_"<<(job.clip.kind=="multikill"?L"长镜头":job.clip.kind=="burst"?L"高伤害":L"测试")<<L"_"<<job.clip.kills<<L"_"<<GetCurrentProcessId()<<L"_"<<exportId_++<<L".mp4";
-        job.file=directory/name.str();exports_.push(std::move(job));
+            <<L"_"<<(job.clip.kind=="multikill"?L"长镜头":job.clip.kind=="burst"?L"高伤害":job.clip.kind=="manual"?L"手动":L"测试")<<L"_"<<job.clip.kills<<L"_"<<GetCurrentProcessId()<<L"_"<<exportId_++<<L".mp4";
+        job.file=directory/name.str();
+        if(auto recorder=recorder_.load()){
+            recorder->append({{"type","clip_published"},{"t",qpcSeconds()-epoch_},{"path",pathUtf8(job.file)},{"start",job.clip.start},{"end",job.clip.end},{"videoStart",job.actualStart},{"kind",job.clip.kind},{"opponents",job.clip.kills},{"reason",job.clip.reason}});
+            try{job.devSlice=recorder->slice(job.clip,job.actualStart);job.recorder=std::move(recorder);}catch(...){notify_({{"type","devlog_error"},{"message","片段开发者记录切片失败，视频继续保存"}});}
+        }
+        if(job.clip.kind=="manual")notify_({{"type","manual_save"},{"state","queued"}});exports_.push(std::move(job));
     }
     // Speech leveling delays the audio tracks by about 0.3 s, so a finished clip waits (at most 1.5 s) until all
     // three tracks have reached its end. Only the analysis thread touches the waiting list.
@@ -69,21 +92,25 @@ class CaptureSession {
     }
     void analyze(std::stop_token stop){
         winrt::init_apartment(winrt::apartment_type::multi_threaded);ObservationRules flow(baseRules_);auto& rules=flow.rules();
+        rules.setTrace([this](RuleNote note){if(auto recorder=recorder_.load())recorder->rule(note);});
+        flow.setBoundaryTrace([this](double time,std::string reason){if(auto recorder=recorder_.load())recorder->append({{"type","boundary"},{"t",time},{"reason",reason}});});
         try{
-            HudDetector detector;notify_({{"type","ocr"},{"language",detector.language()},{"ruleVersion",baseRules_.version}});
+            HudDetector detector;auto language=detector.language();notify_({{"type","ocr"},{"language",language},{"ruleVersion",baseRules_.version}});
             while(!stop.stop_requested()){
                 AnalysisFrame frame;
                 {std::unique_lock lock(analysisMutex_);analysisCv_.wait_for(lock,stop,200ms,[&]{return analysisFrame_.has_value();});if(!analysisFrame_){if(stop.stop_requested())break;lock.unlock();rules.tick(qpcSeconds()-epoch_);drain(rules);pending_=rules.pending();continue;}frame=std::move(*analysisFrame_);analysisFrame_.reset();}
-                if(!frame.available){flow.boundary(frame.time);detector.reset();drain(rules);pending_=false;continue;}
+                if(!frame.available){Observation unavailable;unavailable.time=frame.time;unavailable.status="Apex 窗口已最小化";
+                    if(auto recorder=recorder_.load())recorder->observe(unavailable);if(flow.process(unavailable))detector.reset();drain(rules);pending_=rules.pending();continue;}
                 double begin=qpcSeconds();auto observation=detector.process(frame.images,frame.time,frame.firing);
                 auto settings=settings_.load();rules.updateTimings(settings->longPre,settings->longPost);
                 rules.updateThresholds(settings->burstSeconds,settings->burstDamage,settings->fastBurstSeconds,settings->fastBurstDamage);
-                {std::lock_guard lock(statusMutex_);detectionStatus_=observation.status;}
+                {std::lock_guard lock(statusMutex_);detectionStatus_=observation.status;hud_={{"damage",optionalJson(observation.confirmedDamage)},{"kills",optionalJson(observation.killCount)},{"assists",optionalJson(observation.assistCount)}};}
+                if(auto recorder=recorder_.load()){recorder->language(language);recorder->observe(observation);}
                 if(flow.process(observation))detector.reset();for(const auto& event:observation.events)notify_({{"type","event"},{"event",eventJson(event)}});
                 for(const auto& correction:observation.resultCorrections)notify_({{"type","result_correction"},{"target",correction.first},{"kind","assist"}});
                 drain(rules);pending_=rules.pending();analysisMs_=(qpcSeconds()-begin)*1000;
             }
-            rules.boundary(ring_.latest());drain(rules,true);pending_=false;
+            flow.boundary(ring_.latest());drain(rules,true);pending_=false;
         }catch(...){failed_=true;notify_({{"type","fatal"},{"message",errorText()}});}
     }
     void record(std::stop_token stop) {
@@ -118,11 +145,13 @@ class CaptureSession {
                     notify_({{"type","audio_levels"},{"levels",levels},{"audioHealthy",health},{"speech",speech}});lastAudio=time;
                 }
                 if(time-lastStatus>=1){
-                    std::string detection;{std::lock_guard lock(statusMutex_);detection=detectionStatus_;}
+                    std::string detection;json hud;{std::lock_guard lock(statusMutex_);detection=detectionStatus_;hud=hud_;}
+                    auto recorder=recorder_.load();auto devPath=recorder?recorder->path():std::filesystem::path();
                     json health=json::array();for(auto& a:audio_)health.push_back(a->healthy());
                     notify_({{"type","status"},{"state",minimized?"paused":pending_?"pending":"buffering"},{"bufferSeconds",ring_.duration()},{"bufferBytes",ring_.bytes()},
                         {"totalBytes",Packet::liveBytes.load()},{"frames",videoFrames_.load()},{"repeatedFrames",repeatedFrames_.load()},
                         {"memoryBudgetBytes",ring_.budget()},{"idleMemoryBytes",ring_.idleBytes()},{"replayMinutes",settings_.load()->replayMinutes},{"memoryPercent",settings_.load()->memoryPercent},
+                        {"hud",hud},{"devLogPath",devPath.empty()?"":pathUtf8(devPath)},{"canSaveReplay",ring_.earliestKey()>=0&&std::min(ring_.latestVideo(),ring_.latestAudio())>ring_.earliestKey()&&!exports_.manualBusy()},
                         {"analysisDropped",skippedAnalysis_.load()},{"analysisMs",analysisMs_.load()},{"renderMs",renderMs},{"convertMs",convertMs},{"encodeMs",encodeMs},{"readbackMs",readbackMs},{"detection",detection},
                         {"audioHealthy",health},{"captureBorderHidden",capture_->borderHidden()},{"videoWidth",gpu_.width()},{"videoHeight",gpu_.height()},{"videoCodec",avcodec_get_name(codecs_->parameters[0]->codec_id)},
                         {"videoTargetBitrateMbps",video_->targetBitrateMbps()},{"videoPreset",video_->preset()},{"videoSplitEncodingConfigured",video_->splitEncodingConfigured()},
@@ -144,6 +173,7 @@ public:
         for(int i=0;i<3;++i){audio_[i]=std::make_unique<AudioCapture>(i+1,target_.pid,settings_.load()->microphoneId,epoch_,
             [this](PacketRef p){ring_.push(std::move(p));},[this]{return settings_.load()->balance;},[this](json j){if(j.value("type","")=="fatal")failed_=true;notify_(std::move(j));},settings_.load()->micNoiseSuppression);
             codecs_->parameters[i+1]=audio_[i]->parameters();codecs_->timebases[i+1]=audio_[i]->timebase();}
+        updateRecorder(*settings_.load());
         capture_=std::make_unique<WindowCapture>(target.handle,gpu_.device());
         for(auto& a:audio_)a->start();analysisThread_=std::jthread([this](auto stop){analyze(stop);});videoThread_=std::jthread([this](auto stop){record(stop);});
     }
@@ -153,7 +183,16 @@ public:
         for(auto& a:audio_)if(a)a->stop();
         analysisThread_.request_stop();analysisCv_.notify_all();if(analysisThread_.joinable())analysisThread_.join();capture_.reset();
     }
-    void update(Settings settings){ring_.configure(settings.replayMinutes,settings.memoryPercent);if(audio_[1]){audio_[1]->microphone(settings.microphoneId);audio_[1]->noiseSuppression(settings.micNoiseSuppression);}settings_.store(std::make_shared<Settings>(std::move(settings)));}
+    void update(Settings settings){updateRecorder(settings);ring_.configure(settings.replayMinutes,settings.memoryPercent);if(audio_[1]){audio_[1]->microphone(settings.microphoneId);audio_[1]->noiseSuppression(settings.micNoiseSuppression);}settings_.store(std::make_shared<Settings>(std::move(settings)));}
+    void requestManualSave(){
+        if(exports_.manualBusy()){notify_({{"type","manual_save"},{"state","busy"}});return;}
+        double start=ring_.earliestKey(),end=std::min(ring_.latestVideo(),ring_.latestAudio());
+        if(start<0||end<=start){notify_({{"type","manual_save"},{"state","unavailable"}});return;}
+        try{if(auto recorder=recorder_.load())recorder->append({{"type","manual_save"},{"t",qpcSeconds()-epoch_},{"state","requested"},{"start",start},{"end",end}});
+            ClipPlan clip{start,end,"manual",baseRules_.version,{},false,false,0,"用户手动保存全部缓存"};publishClip(std::move(clip));}
+        catch(...){auto message="手动保存失败："+errorText();if(auto recorder=recorder_.load())recorder->append({{"type","manual_save"},{"t",qpcSeconds()-epoch_},{"state","failed"},{"detail",message}});
+            notify_({{"type","manual_save"},{"state","failed"},{"message",message}});notify_({{"type","export_failed"},{"message",message},{"retryable",false}});}
+    }
     bool failed()const{return failed_;}
     HWND window()const{return target_.handle;}
     void exportForTest(double start,double end){publishClip({start,end,"selftest",baseRules_.version,{},false,false,0});}
