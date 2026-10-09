@@ -24,14 +24,15 @@ public:
         if(!engine_)throw std::runtime_error("Windows 本地 OCR 不可用，请在 Windows 语言设置中添加中文基本输入组件");
     }
     std::string language()const{return winrt::to_string(engine_.RecognizerLanguage().LanguageTag());}
-    OcrRead read(const CpuImage& image,bool contrast=false,bool redNames=false) {
+    OcrRead read(const CpuImage& image,bool contrast=false,bool redNames=false,bool goldNames=false) {
         int scale=image.width<900?2:1,w=image.width*scale,h=image.height*scale;
         std::vector<uint8_t> pixels(size_t(w)*h*4);
         for(int y=0;y<h;++y)for(int x=0;x<w;++x){
             const auto* src=image.bgra.data()+(size_t(y/scale)*image.width+x/scale)*4;
             auto* dst=pixels.data()+(size_t(y)*w+x)*4;
             if(contrast){bool white=std::min({src[0],src[1],src[2]})>=155;bool orange=src[2]>175&&src[1]>65&&src[1]<185&&src[2]>src[1]*1.4&&src[1]>src[0]*1.4;
-                bool red=redNames&&src[2]>150&&src[2]>src[1]*1.4&&src[2]>src[0]*1.4;uint8_t v=white||orange||red?0:255;dst[0]=dst[1]=dst[2]=v;}else memcpy(dst,src,3);
+                bool gold=goldNames&&src[2]>150&&src[1]>90&&src[2]>src[0]*1.5&&src[1]>src[0]*1.3&&src[2]>=src[1]*1.05;
+                bool red=redNames&&src[2]>150&&src[2]>src[1]*1.4&&src[2]>src[0]*1.4;uint8_t v=white||orange||red||gold?0:255;dst[0]=dst[1]=dst[2]=v;}else memcpy(dst,src,3);
             dst[3]=255;
         }
         auto buffer=winrt::Windows::Security::Cryptography::CryptographicBuffer::CreateFromByteArray(pixels);
@@ -51,7 +52,23 @@ class HudDetector {
     std::optional<int> risingAmmo_;std::string changingWeapon_;
     OwnFeedAttribution attribution_;double nameReadAt_=-100,feedReadAt_=-100;
     ResultPrompts results_;
+    std::filesystem::path playerFile_;std::string savedPlayer_;
+    void savePlayer()noexcept{
+        if(playerFile_.empty()||attribution_.playerName().empty()||savedPlayer_==attribution_.playerName())return;
+        try{std::filesystem::create_directories(playerFile_.parent_path());auto temporary=playerFile_;temporary+=L".tmp";
+            {std::ofstream out(temporary,std::ios::binary);out<<json{{"playerName",attribution_.playerName()}}.dump()<<'\n';out.flush();if(!out)return;}
+            if(MoveFileExW(temporary.c_str(),playerFile_.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))savedPlayer_=attribution_.playerName();
+        }catch(...){} // Remembering an ID must never interrupt capture.
+    }
 public:
+    explicit HudDetector(bool rememberPlayer=false){
+        if(!rememberPlayer)return;
+        wchar_t local[32768]{};auto size=GetEnvironmentVariableW(L"LOCALAPPDATA",local,DWORD(std::size(local)));
+        if(!size||size>=std::size(local))return;playerFile_=std::filesystem::path(local)/L"ApexPerif"/L"player-id.json";
+        try{auto data=json::parse(std::ifstream(playerFile_));auto name=data.value("playerName",std::string());
+            if(!name.empty()&&name.size()<=128){attribution_.rememberPlayer(name);savedPlayer_=attribution_.playerName();}}
+        catch(...){}
+    }
     std::string language()const{return ocr_.language();}
     void reset(){ammo_.reset();risingAmmo_.reset();damage_.reset();kills_.reset();assists_.reset();magazine_=1;weapon_.clear();changingWeapon_.clear();results_.reset();shotAt_=-100;lastActive_=0;stateReadAt_=-100;stateText_.clear();attribution_.reset();nameReadAt_=feedReadAt_=-100;}
     Observation process(const std::array<CpuImage,8>& images,double time,bool controllerFire=false) {
@@ -93,16 +110,19 @@ public:
         obs.active=obs.ammo.has_value()&&battleLayout&&!excluded;
         obs.status=excluded?"非本人战斗画面":obs.active?(obs.totalDamage?"HUD 已识别":"HUD 已识别 · 伤害数字不可读"):"等待战斗画面";
         if(obs.active){
-            if(time-nameReadAt_>=.5){attribution_.observeName(ocr_.read(images[6]));nameReadAt_=time;}
-            if(time-feedReadAt_>=.3){auto feed=ocr_.read(images[7]);obs.feed=attribution_.observeFeed(feed,time,&images[7]);obs.feedRead=true;
-                for(const auto& line:feed.lines)obs.feedText+=(obs.feedText.empty()?"":" | ")+line;feedReadAt_=time;}
-            obs.playerName=attribution_.playerName();if(auto target=attribution_.recentTarget(time))obs.ownFeedTarget=*target;
+            if(time-nameReadAt_>=.5){auto name=ocr_.read(images[6]),contrast=ocr_.read(images[6],true);attribution_.observeName(name,&contrast);savePlayer();nameReadAt_=time;}
+            if(time-feedReadAt_>=.3){auto feed=ocr_.read(images[7]),gold=ocr_.read(images[7],true,false,true);obs.feed=attribution_.observeFeed(feed,time,&images[7],&gold);obs.feedRead=true;
+                for(const auto& line:feed.lines)obs.feedText+=(obs.feedText.empty()?"":" | ")+line;
+                obs.feedText+=" | 金色姓名识别："+gold.text;feedReadAt_=time;}
+            obs.playerName=attribution_.playerName();if(auto result=attribution_.recentResult(time)){obs.ownFeedTarget=result->victim;obs.ownFeedKnock=result->knock;}
         }
         // A monotonic, repeated counter reading is the only source of damage quantities; the last confirmed
         // value survives frames where the rolling number cannot be read. XP / reward numbers in the center
         // prompt never enter this path.
         if(obs.active){
-            auto change=damage_.observe(obs.totalDamage,time);
+            auto killReading=counters.hidden?std::optional<int>(0):counters.kills,assistReading=counters.hidden?std::optional<int>(0):counters.assists;
+            bool countersReset=(killReading&&kills_.value()&&*killReading<*kills_.value())||(assistReading&&assists_.value()&&*assistReading<*assists_.value());
+            auto change=damage_.observe(obs.totalDamage,time,countersReset);
             if(change.reset){reset();obs.status="伤害计数重置，开始新对局";obs.active=false;}
             else{
                 obs.damageDelta=change.delta;obs.damageAt=change.at;obs.damageSince=change.since;obs.damageBaseline=change.baseline;
@@ -122,8 +142,8 @@ public:
         // generic white/orange OCR mask previously erased completely.
         auto prompt=ocr_.read(cropCpu(images[1],{.10,.25,.80,.20}),true,true);obs.prompt=prompt.text;
         if(obs.active){
-            auto read=results_.process(prompt,time,obs.ownFeedTarget,obs.totalDamage);
-            obs.events=std::move(read.events);obs.targetAliases=std::move(read.aliases);obs.resultCorrections=std::move(read.corrections);
+            auto read=results_.process(prompt,time,obs.ownFeedTarget,obs.totalDamage,obs.ownFeedKnock);
+            obs.events=ownFeedResults(obs.feed,read,time);obs.targetAliases=attribution_.takeAliases();
         }
         return obs;
     }

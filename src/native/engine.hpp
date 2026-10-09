@@ -55,7 +55,7 @@ class CaptureSession {
             {"bridgeQuietSeconds",r.bridgeQuietSeconds},{"maxClipSeconds",r.maxClipSeconds},{"splitOverlapSeconds",r.splitOverlapSeconds},{"longPre",settings.longPre},{"longPost",settings.longPost}};
         auto notify=notify_;
         try{recorder_.store(std::make_shared<DevRecorder>(std::filesystem::path(wide(settings.outputDirectory))/L"开发者记录"/name.str(),
-            json{{"settings",settingsJson(settings)},{"rules",rules},{"hudVersion",HudDigits::version},{"startedAt",qpcSeconds()-epoch_}},
+            json{{"settings",settingsJson(settings)},{"rules",rules},{"hudVersion",HudDigits::version},{"resultTrackingVersion",OwnFeedAttribution::version},{"startedAt",qpcSeconds()-epoch_}},
             settings.replayMinutes*60+120,[notify](std::string message){notify({{"type","devlog_error"},{"message",message}});}));}
         catch(...){recorderFailed_=true;notify_({{"type","devlog_error"},{"message","开发者记录创建失败，采集继续"}});}
     }
@@ -95,7 +95,7 @@ class CaptureSession {
         rules.setTrace([this](RuleNote note){if(auto recorder=recorder_.load())recorder->rule(note);});
         flow.setBoundaryTrace([this](double time,std::string reason){if(auto recorder=recorder_.load())recorder->append({{"type","boundary"},{"t",time},{"reason",reason}});});
         try{
-            HudDetector detector;auto language=detector.language();notify_({{"type","ocr"},{"language",language},{"ruleVersion",baseRules_.version}});
+            HudDetector detector(true);auto language=detector.language();notify_({{"type","ocr"},{"language",language},{"ruleVersion",baseRules_.version}});
             while(!stop.stop_requested()){
                 AnalysisFrame frame;
                 {std::unique_lock lock(analysisMutex_);analysisCv_.wait_for(lock,stop,200ms,[&]{return analysisFrame_.has_value();});if(!analysisFrame_){if(stop.stop_requested())break;lock.unlock();rules.tick(qpcSeconds()-epoch_);drain(rules);pending_=rules.pending();continue;}frame=std::move(*analysisFrame_);analysisFrame_.reset();}
@@ -212,6 +212,8 @@ inline json inspectImage(const std::filesystem::path& file,bool gpuCheck=false){
         while(av_read_frame(input,packet)>=0){if(packet->stream_index==index){ffcheck(avcodec_send_packet(decoder,packet),"decode image");if(avcodec_receive_frame(decoder,frame)>=0)break;}av_packet_unref(packet);}
         auto image=frameToCpu(frame,scale);LocalOcr ocr;result=json::array();
         for(const auto& region:Gpu::regions){json variants=json::array();for(bool contrast:{false,true}){auto read=ocr.read(cropCpu(image,region),contrast);json words=json::array();for(auto& w:read.words)words.push_back({{"text",w.text},{"x",w.x},{"y",w.y},{"w",w.w},{"h",w.h}});variants.push_back({{"contrast",contrast},{"text",read.text},{"lines",read.lines},{"words",words}});}result.push_back(variants);}
+        auto gold=ocr.read(cropCpu(image,Gpu::regions[7]),true,false,true);json goldWords=json::array();for(const auto& word:gold.words)goldWords.push_back({{"text",word.text},{"x",word.x},{"y",word.y},{"w",word.w},{"h",word.h}});
+        result[7].push_back({{"goldNames",true},{"text",gold.text},{"lines",gold.lines},{"words",goldWords}});
         auto read=ocr.read(cropCpu(cropCpu(image,Gpu::regions[2]),{.54,.16,.24,.31}),true);json words=json::array();for(auto& w:read.words)words.push_back({{"text",w.text},{"x",w.x},{"y",w.y},{"w",w.w},{"h",w.h}});result.push_back({{"ammoCrop",read.text},{"words",words}});
         std::array<CpuImage,8> images;for(size_t i=0;i<images.size();++i)images[i]=cropCpu(image,Gpu::regions[i]);HudDetector detector;detector.process(images,0);auto baseline=detector.process(images,.2);result.push_back({{"observation",baseline.toJson()}});
         if(gpuCheck){json checks=json::array();for(auto size:{std::pair{1920,1080},std::pair{2560,1440},std::pair{3840,2160}}){

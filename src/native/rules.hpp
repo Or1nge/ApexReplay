@@ -26,6 +26,7 @@ struct CombatEvent {
     ResultKind kind=ResultKind::Knockdown;
     std::string target, evidence;
     double confidence=1;
+    std::string id;
 };
 struct DamageSample { double time=0; int damage=0; unsigned magazine=0; bool firing=false; };
 struct Burst { double start=0,end=0; int damage=0; };
@@ -56,7 +57,7 @@ class RuleEngine {
         std::vector<CombatEvent> events;
         int bestSum=0,bestPeak=0;
     };
-    struct Knock { double time=0; bool finished=false; };
+    struct Knock { double time=0; bool finished=false; std::string name; };
     Rules rules_;
     std::deque<DamageSample> damage_;
     std::optional<Candidate> candidate_;
@@ -68,7 +69,7 @@ class RuleEngine {
     std::function<void(RuleNote)> trace_;
     void note(RuleNote value) const { if (trace_) trace_(std::move(value)); }
     static std::string identity(const CombatEvent& e) {
-        return e.target.empty() ? "unknown@"+std::to_string(e.time) : e.target;
+        return !e.id.empty()?e.id:e.target.empty() ? "unknown@"+std::to_string(e.time) : e.target;
     }
     std::optional<Burst> burst(double time) const {
         for(size_t i=0;i<damage_.size();++i){
@@ -100,6 +101,11 @@ class RuleEngine {
         }
         return meaningful && to-previous<=rules_.bridgeQuietSeconds;
     }
+    bool unfinishedFight(double time)const{
+        if(!candidate_||candidate_->opponents.size()!=1||time-candidate_->lastResult>rules_.bridgeMergeSeconds)return false;
+        for(const auto& key:candidate_->opponents)if(auto it=knocked_.find(key);it!=knocked_.end()&&!it->second.finished)return true;
+        return false;
+    }
     // An elimination usually finishes an opponent this player knocked earlier. Both prompts are read
     // separately, so the names can differ by OCR or be unreadable on either side.
     std::optional<std::string> knockFinishedBy(const CombatEvent& event,const std::string& target) const {
@@ -108,8 +114,9 @@ class RuleEngine {
         std::optional<std::string> unnamed; double newest=-1e9;
         for (const auto& [name,knock]:knocked_) {
             if (!open(knock)) continue;
-            bool named=!unnamedTarget(name)&&!unnamedTarget(target);
-            if (named && sameOpponentName(name,target)) return name;
+            auto display=knock.name.empty()?name:knock.name;auto victim=event.target.empty()?target:event.target;
+            bool named=!unnamedTarget(display)&&!unnamedTarget(victim);
+            if (named && sameOpponentName(display,victim)) return name;
             if (!named && event.time-knock.time<=90 && knock.time>newest) { unnamed=name; newest=knock.time; }
         }
         return unnamed;
@@ -180,10 +187,13 @@ public:
         const std::string token=std::to_string(static_cast<int>(event.kind))+":"+target;
         if (seen_.contains(token) && event.time-seen_[token]<30) { note({event.time,"result_duplicate","30 秒内重复的同一结果",target,event.kind}); return; }
         seen_[token]=event.time;
+        if(event.kind==ResultKind::Knockdown&&!event.id.empty())for(const auto& [key,knock]:knocked_)
+            if(event.time-knock.time<30&&candidate_&&candidate_->opponents.contains(key)&&sameOpponentName(knock.name,event.target)){
+                note({event.time,"result_duplicate","同一敌人的重复击倒信息",event.target,event.kind,candidate_->opponents.size()});return;}
         if (event.kind==ResultKind::Elimination) {
             if (auto knock=knockFinishedBy(event,target)) {
                 knocked_[*knock].finished=true;
-                if (candidate_) candidate_->events.push_back(event);
+                if (candidate_&&candidate_->opponents.contains(*knock)){candidate_->events.push_back(event);candidate_->lastResult=std::max(candidate_->lastResult,event.time);}
                 note({event.time,"elimination_of_knocked","淘汰的是之前击倒的 "+*knock+"，不重复计人",target,event.kind,candidate_?candidate_->opponents.size():0});
                 if (unnamedTarget(*knock) && !unnamedTarget(target)) resolveTarget(*knock,target);
                 return;
@@ -198,7 +208,9 @@ public:
         tick(event.time);
         if (candidate_) {
             double gap=event.time-candidate_->lastResult;
-            if (gap>rules_.fastMergeSeconds && !bridge(candidate_->lastResult,event.time)) finish(event.time);
+            // Retain the first confirmed knock across healing/reloading within the existing
+            // 20-second limit; completed multikill sequences still need a damage bridge.
+            if (gap>rules_.fastMergeSeconds && !bridge(candidate_->lastResult,event.time)&&!unfinishedFight(event.time)) finish(event.time);
         }
         double action=b?b->start:event.time;
         if (!b) {
@@ -224,7 +236,7 @@ public:
         candidate_->squadWipe|=event.time-lastWipe_<=3;
         candidate_->events.push_back(event);
         if (event.kind!=ResultKind::Assist) candidate_->opponents.insert(target);
-        if (event.kind==ResultKind::Knockdown) knocked_[target]=Knock{event.time,false};
+        if (event.kind==ResultKind::Knockdown) knocked_[target]=Knock{event.time,false,event.target};
         note({event.time,fresh?"candidate_started":"candidate_extended",
             std::string(event.kind==ResultKind::Assist?"助攻":"计为敌人 ")+(event.kind==ResultKind::Assist?"":target)+(b?"；伤害达标":"；伤害未达标"),
             target,event.kind,candidate_->opponents.size(),stats});
@@ -239,6 +251,7 @@ public:
     void resolveTarget(const std::string& oldTarget,const std::string& target){
         if(oldTarget==target||target.empty())return;
         if(candidate_){if(candidate_->opponents.erase(oldTarget))candidate_->opponents.insert(target);for(auto& e:candidate_->events)if(e.target==oldTarget)e.target=target;}
+        for(auto& [key,knock]:knocked_)if(knock.name==oldTarget)knock.name=target;
         if(knocked_.contains(oldTarget)){knocked_[target]=knocked_[oldTarget];knocked_.erase(oldTarget);}
         for(int kind=0;kind<3;++kind){auto old=std::to_string(kind)+":"+oldTarget;if(seen_.contains(old)){seen_[std::to_string(kind)+":"+target]=seen_[old];seen_.erase(old);}}
     }

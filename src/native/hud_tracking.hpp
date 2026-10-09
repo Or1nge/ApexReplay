@@ -9,26 +9,28 @@ namespace apex {
 struct DamageChange { int delta=0; double at=0,since=0; bool baseline=false,reset=false; };
 class DamageTracker {
     std::optional<int> value_,pending_,lower_;
-    int pendingHits_=0,lowerHits_=0;double seenAt_=0,pendingAt_=0;
+    int pendingHits_=0,lowerHits_=0,lowerResetHits_=0;double seenAt_=0,pendingAt_=0;
 public:
-    void reset(){value_.reset();pending_.reset();lower_.reset();pendingHits_=lowerHits_=0;seenAt_=pendingAt_=0;}
+    void reset(){value_.reset();pending_.reset();lower_.reset();pendingHits_=lowerHits_=lowerResetHits_=0;seenAt_=pendingAt_=0;}
     std::optional<int> value()const{return value_;}
-    DamageChange observe(std::optional<int> reading,double time){
+    DamageChange observe(std::optional<int> reading,double time,bool countersReset=true){
         DamageChange change;
         if(!reading)return change;
         int current=*reading;
         auto stable=[&](int needed){if(pending_&&*pending_==current)++pendingHits_;else{pending_=current;pendingAt_=time;pendingHits_=1;}
             if(pendingHits_<needed)return false;value_=current;seenAt_=time;pending_.reset();pendingHits_=0;return true;};
         if(!value_){change.baseline=stable(3);return change;}
-        if(current==*value_){seenAt_=time;pending_.reset();pendingHits_=0;lower_.reset();lowerHits_=0;return change;}
+        if(current==*value_){seenAt_=time;pending_.reset();pendingHits_=0;lower_.reset();lowerHits_=lowerResetHits_=0;return change;}
         if(current<*value_){
-            // A large drop held for three reads is a new match; small drops are misreads of a changing number.
+            // A damage OCR correction alone cannot end a fight. A new match also needs repeated
+            // independent kill/assist reset evidence; otherwise recover the damage baseline in place.
             if(*value_-current>100){if(lower_&&*lower_==current)++lowerHits_;else{lower_=current;lowerHits_=1;}
-                if(lowerHits_>=3){value_=current;seenAt_=time;lower_.reset();lowerHits_=0;pending_.reset();pendingHits_=0;change.reset=true;}}
-            else{lower_.reset();lowerHits_=0;}
+                lowerResetHits_=countersReset?lowerResetHits_+1:0;
+                if(lowerHits_>=3){change.reset=lowerResetHits_>=3;change.baseline=!change.reset;value_=current;seenAt_=time;lower_.reset();lowerHits_=lowerResetHits_=0;pending_.reset();pendingHits_=0;}}
+            else{lower_.reset();lowerHits_=lowerResetHits_=0;}
             return change;
         }
-        lower_.reset();lowerHits_=0;
+        lower_.reset();lowerHits_=lowerResetHits_=0;
         // Growth beyond what fits in the time since the last confirmed read is a misread or a missed match
         // change; it only becomes a new baseline once stable, without being counted as damage.
         if(current-*value_>500+400*std::max(0.0,time-seenAt_-1)){change.baseline=stable(3);return change;}

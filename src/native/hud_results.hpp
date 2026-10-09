@@ -43,9 +43,10 @@ class ResultPrompts {
     }
     static std::string identity(const Banner& banner){return banner.target.empty()?"hud-result-"+std::to_string(banner.id):banner.target;}
 public:
+    static constexpr const char* version="apex-results-v2-typed-feed";
     struct Read {std::vector<CombatEvent> events;std::vector<std::pair<std::string,std::string>> aliases;std::vector<std::pair<std::string,ResultKind>> corrections;};
     void reset(){banners_={};nextId_=0;seeded_=false;}
-    Read process(const OcrRead& prompt,double time,const std::string& ownFeedTarget={},std::optional<int> totalDamage={}){
+    Read process(const OcrRead& prompt,double time,const std::string& ownFeedTarget={},std::optional<int> totalDamage={},std::optional<bool> ownFeedKnock={}){
         Read read;
         for(const auto& line:prompt.lines){
             auto kind=classify(line);if(!kind)continue;
@@ -72,10 +73,15 @@ public:
                 // Stable OCR can still read a different fragment of the same red name.
                 // A rapid new result needs fresh damage or its own corroborated feed name.
                 bool newCombat=totalDamage&&banner.resultDamage&&*totalDamage>*banner.resultDamage;
-                bool newOwnTarget=!ownFeedTarget.empty()&&!similarTarget(banner.target,ownFeedTarget)&&similarTarget(target,ownFeedTarget);
-                if(!newCombat&&!newOwnTarget){banner.pending.clear();banner.pendingHits=0;continue;}
+                bool matchesOwnTarget=!ownFeedTarget.empty()&&!similarTarget(banner.target,ownFeedTarget)&&similarTarget(target,ownFeedTarget);
+                bool newOwnTarget=matchesOwnTarget&&ownFeedKnock&&
+                    ((*kind==ResultKind::Knockdown&&*ownFeedKnock)||(*kind==ResultKind::Elimination&&!*ownFeedKnock));
+                // An elimination feed row can recover a garbled knockdown name, but does not prove another knock.
+                bool recoveredKnock=matchesOwnTarget&&ownFeedKnock&&!*ownFeedKnock&&*kind==ResultKind::Knockdown&&!newCombat;
+                if(!newCombat&&!newOwnTarget&&!recoveredKnock){banner.pending.clear();banner.pendingHits=0;continue;}
                 if(target==banner.pending)++banner.pendingHits;else{banner.pending=target;banner.pendingHits=1;}
                 if(banner.pendingHits<2)continue;
+                if(recoveredKnock){read.aliases.emplace_back(identity(banner),target);banner.target=target;banner.fromFeed=fromFeed;banner.pending.clear();banner.pendingHits=0;continue;}
                 banner={};banner.first=banner.last=time;banner.id=++nextId_;banner.hits=1;
             }
             if(!target.empty()){
@@ -95,4 +101,15 @@ public:
         seeded_=true;return read;
     }
 };
+// Only attributed right-hand feed rows create own knock/elimination events. Central banners
+// retain assists and squad wipes, which the feed cannot attribute on their own.
+inline std::vector<CombatEvent> ownFeedResults(const std::vector<FeedEntry>& feed,const ResultPrompts::Read& prompts,double time){
+    std::vector<CombatEvent> events;
+    for(const auto& row:feed)events.push_back({row.time,row.knock?ResultKind::Knockdown:ResultKind::Elimination,row.victim,
+        "右上角本人击杀信息，攻击者 ID 匹配且连续两次确认",.95,row.id});
+    for(const auto& event:prompts.events)if(event.kind==ResultKind::Assist||event.kind==ResultKind::SquadWipe)events.push_back(event);
+    for(const auto& correction:prompts.corrections)if(correction.second==ResultKind::Assist)
+        events.push_back({time,ResultKind::Assist,correction.first,"中央助攻提示前缀补全",.95});
+    return events;
+}
 }

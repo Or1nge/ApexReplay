@@ -46,15 +46,16 @@ public:
         std::unique_lock lock(mutex_);if(!enabled_)return;
         try{
             json hud{{"type","hud"},{"active",o.active},{"status",o.status},{"damage",optionalJson(o.totalDamage)},{"kills",optionalJson(o.kills)},{"assists",optionalJson(o.assists)},
-                {"confirmedDamage",optionalJson(o.confirmedDamage)},{"killCount",optionalJson(o.killCount)},{"assistCount",optionalJson(o.assistCount)},{"ammo",optionalJson(o.ammo)},{"countersHidden",o.countersHidden}};
+                {"confirmedDamage",optionalJson(o.confirmedDamage)},{"killCount",optionalJson(o.killCount)},{"assistCount",optionalJson(o.assistCount)},{"ammo",optionalJson(o.ammo)},{"countersHidden",o.countersHidden},{"playerName",o.playerName}};
             if(hud!=lastHud_||o.time-lastHudAt_>=10){lastHud_=hud;lastHudAt_=o.time;hud["t"]=o.time;appendLocked(std::move(hud));}
             if(o.damageDelta>0)appendLocked({{"type","damage"},{"t",o.time},{"delta",o.damageDelta},{"total",optionalJson(o.confirmedDamage)},{"at",o.damageAt},{"since",o.damageSince},{"firing",o.firing},{"magazine",o.magazine}});
             if(o.damageBaseline)appendLocked({{"type","damage_baseline"},{"t",o.time},{"total",optionalJson(o.confirmedDamage)}});
             for(auto [type,delta,value]:{std::tuple{"kill_counter",o.killDelta,o.killCount},std::tuple{"assist_counter",o.assistDelta,o.assistCount}})
                 if(delta>0&&value)appendLocked({{"type",type},{"t",o.time},{"from",*value-delta},{"to",*value}});
-            if(!promptSeen_||prompt_!=o.prompt){promptSeen_=true;prompt_=o.prompt;appendLocked({{"type","prompt"},{"t",o.time},{"text",o.prompt}});}
+            if(!promptSeen_||prompt_!=o.prompt){promptSeen_=true;prompt_=o.prompt;appendLocked({{"type","prompt"},{"t",o.time},{"text",o.prompt},
+                {"damage",optionalJson(o.totalDamage)},{"ownFeedTarget",o.ownFeedTarget},{"ownFeedKnock",o.ownFeedKnock?json(*o.ownFeedKnock):json(nullptr)}});}
             if(o.feedRead&&(!feedSeen_||feed_!=o.feedText)){feedSeen_=true;feed_=o.feedText;appendLocked({{"type","feed"},{"t",o.time},{"text",o.feedText}});}
-            for(const auto& f:o.feed)appendLocked({{"type","feed_own"},{"t",f.time},{"victim",f.victim},{"knock",f.knock}});
+            for(const auto& f:o.feed)appendLocked({{"type","feed_own"},{"t",f.time},{"victim",f.victim},{"knock",f.knock},{"id",f.id}});
             for(const auto& e:o.events){auto entry=eventJson(e);entry["type"]="result";entry["t"]=e.time;appendLocked(std::move(entry));}
             for(const auto& a:o.targetAliases)appendLocked({{"type","result"},{"t",o.time},{"alias",a.first},{"target",a.second},{"detail","补全目标名称"}});
             for(const auto& c:o.resultCorrections)appendLocked({{"type","result"},{"t",o.time},{"target",c.first},{"kind",resultKindName(c.second)},{"detail","中央提示纠正"}});

@@ -6,7 +6,8 @@ namespace apex {
 using json=nlohmann::json;
 inline json eventJson(const CombatEvent& e) {
     constexpr const char* kinds[]={"knockdown","elimination","assist","squad_wipe"};
-    return {{"time",e.time},{"kind",kinds[static_cast<int>(e.kind)]},{"target",e.target},{"confidence",e.confidence},{"evidence",e.evidence}};
+    json value{{"time",e.time},{"kind",kinds[static_cast<int>(e.kind)]},{"target",e.target},{"confidence",e.confidence},{"evidence",e.evidence}};
+    if(!e.id.empty())value["id"]=e.id;return value;
 }
 inline json clipJson(const ClipPlan& c) {
     json events=json::array(); for(const auto& e:c.events)events.push_back(eventJson(e));
@@ -17,6 +18,7 @@ inline json optionalJson(const std::optional<int>& value){return value?json(*val
 struct Observation {
     double time=0;bool active=false,firing=false,reload=false,hitFeedback=false,countersHidden=false,damageBaseline=false,feedRead=false;
     std::optional<int> ammo,totalDamage,confirmedDamage,kills,assists,killCount,assistCount;
+    std::optional<bool> ownFeedKnock;
     std::string weapon,status,prompt,playerName,ownFeedTarget,excludedBy,feedText;
     unsigned magazine=1;int damageDelta=0,killDelta=0,assistDelta=0;double damageAt=0,damageSince=0;
     std::vector<CombatEvent> events;
@@ -25,12 +27,13 @@ struct Observation {
     std::vector<FeedEntry> feed;
     json toJson()const {
         json eventsJson=json::array();for(const auto& e:events)eventsJson.push_back(eventJson(e));
-        json feedJson=json::array();for(const auto& f:feed)feedJson.push_back({{"victim",f.victim},{"knock",f.knock}});
+        json feedJson=json::array();for(const auto& f:feed)feedJson.push_back({{"victim",f.victim},{"knock",f.knock},{"id",f.id}});
         json out{{"time",time},{"active",active},{"firing",firing},{"reload",reload},{"hitFeedback",hitFeedback},
             {"weapon",weapon},{"magazine",magazine},{"damageDelta",damageDelta},{"status",status},{"prompt",prompt},{"events",eventsJson},{"playerName",playerName},{"ownFeedTarget",ownFeedTarget},{"targetAliases",targetAliases},{"resultCorrections",resultCorrections},
-            {"countersHidden",countersHidden},{"killDelta",killDelta},{"assistDelta",assistDelta},{"excludedBy",excludedBy},{"ownFeed",feedJson}};
+            {"countersHidden",countersHidden},{"killDelta",killDelta},{"assistDelta",assistDelta},{"excludedBy",excludedBy},{"ownFeed",feedJson},{"feedRead",feedRead},{"feedText",feedText}};
         out["ammo"]=optionalJson(ammo);out["totalDamage"]=optionalJson(totalDamage);out["confirmedDamage"]=optionalJson(confirmedDamage);
-        out["kills"]=optionalJson(kills);out["assists"]=optionalJson(assists);out["killCount"]=optionalJson(killCount);out["assistCount"]=optionalJson(assistCount);return out;
+        out["kills"]=optionalJson(kills);out["assists"]=optionalJson(assists);out["killCount"]=optionalJson(killCount);out["assistCount"]=optionalJson(assistCount);
+        out["ownFeedKnock"]=ownFeedKnock?json(*ownFeedKnock):json(nullptr);return out;
     }
 };
 // Healing, the map and grenades hide the ammo HUD for seconds at a time, so only a long gap or a lasting
