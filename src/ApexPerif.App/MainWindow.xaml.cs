@@ -63,6 +63,14 @@ public partial class MainWindow : Window
         else if((uint)message==App.ExitMessage){ExitAsync();handled=true;}
         return IntPtr.Zero;
     }
+    private void ShowSettings(bool visible)
+    {
+        HomePage.Visibility=visible?Visibility.Collapsed:Visibility.Visible;
+        SettingsScroll.Visibility=BackButton.Visibility=visible?Visibility.Visible:Visibility.Collapsed;
+        SettingsButton.Visibility=visible?Visibility.Collapsed:Visibility.Visible;
+    }
+    private void Settings_Click(object sender,RoutedEventArgs e){ShowSettings(true);BackButton.Focus();}
+    private void Back_Click(object sender,RoutedEventArgs e){ShowSettings(false);SettingsButton.Focus();}
     private async void LoadedAsync(object sender,RoutedEventArgs e)
     {
         var args=Environment.GetCommandLineArgs();
@@ -91,9 +99,9 @@ public partial class MainWindow : Window
             // Overview and settings pages: ui.png / ui.settings.png in dark, ui.light.png / ui.light.settings.png in light.
             foreach(var light in new[]{false,true})
             {
-                Themes.Apply(light);UpdateTitleBar();NavHome.IsChecked=true;SettingsScroll.ScrollToTop();await Task.Delay(500);UpdateLayout();
+                Themes.Apply(light);UpdateTitleBar();ShowSettings(false);SettingsScroll.ScrollToTop();await Task.Delay(500);UpdateLayout();
                 var path=light?Path.ChangeExtension(args[2],"light.png"):args[2];Snapshot(path);
-                NavSettings.IsChecked=true;await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"settings.png"));
+                ShowSettings(true);await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"settings.png"));
                 SettingsScroll.ScrollToVerticalOffset(SettingsScroll.VerticalOffset+CriteriaSection.TranslatePoint(new System.Windows.Point(),SettingsScroll).Y-20);
                 await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"criteria.png"));
                 SettingsScroll.ScrollToBottom();await Task.Delay(150);UpdateLayout();Snapshot(Path.ChangeExtension(path,"general.png"));

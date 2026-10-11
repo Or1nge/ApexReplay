@@ -44,7 +44,7 @@ class OwnFeedAttribution {
             for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)if(y+dy>=0&&y+dy<20&&x+dx>=0&&x+dx<128)found|=to[size_t(y+dy)*128+x+dx]!=0;if(!found)++miss;}return ink>=20&&miss<=ink*tolerance;};return coverage(a,b)&&coverage(b,a);
     }
 public:
-    static constexpr const char* version="apex-results-v4-fight-continuity";
+    static constexpr const char* version="apex-results-v5-feed-resume";
     void reset(){pendingName_.clear();nameHits_=0;seeded_=false;tracks_.clear();aliases_.clear();ownGlyph_={};ownAspect_=0;}
     void rememberPlayer(const std::string& name){own_=identifier(name,true);reset();}
     const std::string& playerName()const{return own_;}
@@ -98,8 +98,10 @@ public:
         std::vector<bool> used(tracks_.size());std::vector<int> assigned(rows.size(),-1);
         // Match names across scrolling first, then unchanged glyphs when OCR reads a different fragment.
         for(int pass=0;pass<2;++pass)for(size_t i=0;i<rows.size();++i)if(assigned[i]<0){int best=-1;double distance=1e9;
-            for(size_t j=0;j<tracks_.size();++j)if(!used[j]&&rows[i].knock==tracks_[j].row.knock&&time-tracks_[j].last<=3){
-                bool matches=pass==0?sameOpponentName(rows[i].victim,tracks_[j].row.victim):std::abs(rows[i].aspect-tracks_[j].row.aspect)<=std::max(rows[i].aspect,tracks_[j].row.aspect)*.35&&sameMask(rows[i].mask,tracks_[j].row.mask);
+            // Looting and healing can hide the combat HUD while the same feed row stays visible.
+            // Keep confirmed identities through those gaps; unconfirmed rows still expire quickly.
+            for(size_t j=0;j<tracks_.size();++j)if(!used[j]&&rows[i].knock==tracks_[j].row.knock&&time-tracks_[j].last<=(tracks_[j].reported||tracks_[j].historical?30:3)){
+                bool matches=pass==0?(time-tracks_[j].last<=3?sameOpponentName(rows[i].victim,tracks_[j].row.victim):nameCharacters(rows[i].victim)==nameCharacters(tracks_[j].row.victim)):std::abs(rows[i].aspect-tracks_[j].row.aspect)<=std::max(rows[i].aspect,tracks_[j].row.aspect)*.35&&sameMask(rows[i].mask,tracks_[j].row.mask);
                 double dy=std::abs(rows[i].y-tracks_[j].row.y);if(matches&&dy<distance){best=int(j);distance=dy;}}
             if(best>=0){assigned[i]=best;used[size_t(best)]=true;}}
         for(size_t i=0;i<used.size();++i)if(!used[i]&&!tracks_[i].reported)tracks_[i].hits=0;

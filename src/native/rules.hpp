@@ -71,6 +71,9 @@ class RuleEngine {
     static std::string identity(const CombatEvent& e) {
         return !e.id.empty()?e.id:e.target.empty() ? "unknown@"+std::to_string(e.time) : e.target;
     }
+    static std::string victimToken(ResultKind kind,const std::string& target){
+        std::string token="victim:"+std::to_string(static_cast<int>(kind));for(auto c:nameCharacters(target))token+=":"+std::to_string(c);return token;
+    }
     std::optional<Burst> burst(double time) const {
         for(size_t i=0;i<damage_.size();++i){
             const auto& first=damage_[i];
@@ -187,6 +190,11 @@ public:
         const std::string token=std::to_string(static_cast<int>(event.kind))+":"+target;
         if (seen_.contains(token) && event.time-seen_[token]<30) { note({event.time,"result_duplicate","30 秒内重复的同一结果",target,event.kind}); return; }
         seen_[token]=event.time;
+        if(!event.id.empty()&&!unnamedTarget(event.target)&&(event.kind==ResultKind::Knockdown||event.kind==ResultKind::Elimination)){
+            auto victim=victimToken(event.kind,event.target);
+            if(seen_.contains(victim)&&event.time-seen_[victim]<30){note({event.time,"result_duplicate","同一敌人的结果重新出现，不重复计人",event.target,event.kind,candidate_?candidate_->opponents.size():0});return;}
+            seen_[victim]=event.time;
+        }
         if(event.kind==ResultKind::Knockdown&&!event.id.empty())for(const auto& [key,knock]:knocked_)
             if(event.time-knock.time<30&&candidate_&&candidate_->opponents.contains(key)&&sameOpponentName(knock.name,event.target)){
                 note({event.time,"result_duplicate","同一敌人的重复击倒信息",event.target,event.kind,candidate_->opponents.size()});return;}
@@ -254,6 +262,7 @@ public:
         for(auto& [key,knock]:knocked_)if(knock.name==oldTarget)knock.name=target;
         if(knocked_.contains(oldTarget)){knocked_[target]=knocked_[oldTarget];knocked_.erase(oldTarget);}
         for(int kind=0;kind<3;++kind){auto old=std::to_string(kind)+":"+oldTarget;if(seen_.contains(old)){seen_[std::to_string(kind)+":"+target]=seen_[old];seen_.erase(old);}}
+        for(auto kind:{ResultKind::Knockdown,ResultKind::Elimination}){auto old=victimToken(kind,oldTarget),resolved=victimToken(kind,target);if(old!=resolved&&seen_.contains(old)){seen_[resolved]=seen_[old];seen_.erase(old);}}
     }
     void correctResult(const std::string& target,ResultKind kind){
         if(kind!=ResultKind::Assist)return;
