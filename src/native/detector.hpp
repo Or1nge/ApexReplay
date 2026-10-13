@@ -25,17 +25,8 @@ public:
     }
     std::string language()const{return winrt::to_string(engine_.RecognizerLanguage().LanguageTag());}
     OcrRead read(const CpuImage& image,bool contrast=false,bool redNames=false,bool goldNames=false) {
-        int scale=image.width<900?2:1,w=image.width*scale,h=image.height*scale;
-        std::vector<uint8_t> pixels(size_t(w)*h*4);
-        for(int y=0;y<h;++y)for(int x=0;x<w;++x){
-            const auto* src=image.bgra.data()+(size_t(y/scale)*image.width+x/scale)*4;
-            auto* dst=pixels.data()+(size_t(y)*w+x)*4;
-            if(contrast){bool white=std::min({src[0],src[1],src[2]})>=155;bool orange=src[2]>175&&src[1]>65&&src[1]<185&&src[2]>src[1]*1.4&&src[1]>src[0]*1.4;
-                bool gold=goldNames&&src[2]>150&&src[1]>90&&src[2]>src[0]*1.5&&src[1]>src[0]*1.3&&src[2]>=src[1]*1.05;
-                bool red=redNames&&src[2]>150&&src[2]>src[1]*1.4&&src[2]>src[0]*1.4;uint8_t v=white||orange||red||gold?0:255;dst[0]=dst[1]=dst[2]=v;}else memcpy(dst,src,3);
-            dst[3]=255;
-        }
-        auto buffer=winrt::Windows::Security::Cryptography::CryptographicBuffer::CreateFromByteArray(pixels);
+        auto input=ocrInput(image,contrast,redNames,goldNames);int w=input.width,h=input.height;
+        auto buffer=winrt::Windows::Security::Cryptography::CryptographicBuffer::CreateFromByteArray(input.bgra);
         auto bitmap=winrt::Windows::Graphics::Imaging::SoftwareBitmap::CreateCopyFromBuffer(buffer,winrt::Windows::Graphics::Imaging::BitmapPixelFormat::Bgra8,w,h,winrt::Windows::Graphics::Imaging::BitmapAlphaMode::Ignore);
         auto result=engine_.RecognizeAsync(bitmap).get();OcrRead out;out.text=winrt::to_string(result.Text());
         for(auto line:result.Lines()){out.lines.push_back(winrt::to_string(line.Text()));for(auto word:line.Words()){

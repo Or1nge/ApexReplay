@@ -1,5 +1,5 @@
 {
-  "version": "apex-zh-v3-results",
+  "version": "apex-zh-v4-kill-counter",
   "burstDamage": 250,
   "burstSeconds": 5.0,
   "fastBurstDamage": 150,
@@ -13,5 +13,6 @@
   "maxClipSeconds": 90.0,
   "splitOverlapSeconds": 2.0,
   "longPre": 10.0,
-  "longPost": 5.0
+  "longPost": 5.0,
+  "killCreditSeconds": 10.0
 }

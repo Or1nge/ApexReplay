@@ -7,6 +7,11 @@ using namespace apex;
 void require(bool condition,const char* message) { if (!condition) throw std::runtime_error(message); }
 CombatEvent kd(double t,const char* target) { return {t,ResultKind::Knockdown,target,"central prompt",1}; }
 void burst(RuleEngine& r,double t,unsigned mag=1) { r.damage({t,80,mag,true}); r.damage({t+.5,90,mag,true}); }
+CombatEvent el(double t,const char* target) { return {t,ResultKind::Elimination,target,"feed",1}; }
+// Kill-counter reads every half second over [from,to]; each step adds its delta on the first read at or after its time.
+void counter(RuleEngine& r,double from,double to,std::vector<std::pair<double,int>> steps={}) {
+    for(double t=from;t<=to+1e-9;t+=.5){int delta=0;for(auto [at,step]:steps)if(at>t-.5&&at<=t)delta+=step;r.killCounter(t,true,delta);}
+}
 int main() {
     int passed=0;
     auto test=[&](const char* name,auto body) {try{body();++passed;std::cout<<"PASS "<<name<<'\n';}catch(const std::exception& e){std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';throw;}};
@@ -74,5 +79,14 @@ int main() {
     test("feed knock and separately identified elimination of same victim count once",[]{RuleEngine r;r.result({10,ResultKind::Knockdown,"LACIE","",.95,"feed-result-1"});r.result({12,ResultKind::Elimination,"Lacie","",.95,"feed-result-2"});r.result({15,ResultKind::Knockdown,"好人","",.95,"feed-result-3"});r.tick(40);auto clips=r.takeReady();require(clips.size()==1&&clips[0].kills==2,"feed elimination added opponent");});
     test("feed alias updates display without replacing stable event identity",[]{RuleEngine r;r.result({10,ResultKind::Knockdown,"囗E","",.95,"feed-result-1"});r.resolveTarget("囗E","LACIE");r.result({12,ResultKind::Elimination,"LACIE","",.95,"feed-result-2"});r.result({15,ResultKind::Knockdown,"好人","",.95,"feed-result-3"});r.tick(40);auto clips=r.takeReady();require(clips.size()==1&&clips[0].kills==2&&clips[0].events[0].target=="LACIE"&&clips[0].events[0].id=="feed-result-1","alias lost stable identity");});
     test("central assists and squad wipes remain available without own knocks",[]{ResultPrompts::Read prompt;prompt.events={{10,ResultKind::Elimination,"A","",.95},{10,ResultKind::Assist,"B","",.95},{10,ResultKind::SquadWipe,"","",.95}};prompt.corrections={{"C",ResultKind::Assist}};auto events=ownFeedResults({},prompt,10);require(events.size()==3&&events[0].kind==ResultKind::Assist&&events[1].kind==ResultKind::SquadWipe&&events[2].kind==ResultKind::Assist,"auxiliary results lost");});
+    test("misread names of one opponent follow the kill counter",[]{RuleEngine plain;plain.result(kd(10,"Karish312"));plain.result(el(13,"QWERTY"));plain.tick(40);auto old=plain.takeReady();require(old.size()==1&&old[0].kills==2,"names alone no longer count");
+        RuleEngine r;counter(r,0,9.5);r.result(kd(10,"Karish312"));r.result(el(13,"QWERTY"));counter(r,10,40,{{13.5,1}});r.tick(40);require(r.takeReady().empty(),"one credited opponent saved as two");});
+    test("two credited knocks stay a multikill",[]{RuleEngine r;counter(r,0,9.5);r.result(kd(10,"A"));r.result(kd(12,"B"));counter(r,10,40,{{15,1},{16.2,1}});r.tick(40);auto c=r.takeReady();require(c.size()==1&&c[0].kind=="multikill"&&c[0].kills==2,"credited multikill lost");});
+    test("three names with two credits count two",[]{RuleEngine r;counter(r,0,9.5);r.result(kd(10,"A"));r.result(kd(12,"B"));r.result(el(14,"C"));counter(r,10,40,{{14,2}});r.tick(40);auto c=r.takeReady();require(c.size()==1&&c[0].kills==2&&c[0].events.size()==3,"count not limited by credits");});
+    test("one credit with high damage is a burst of one",[]{RuleEngine r;counter(r,0,9.5);r.damage({9,160,1,true});r.damage({9.8,100,1,true});r.result(kd(10,"A"));r.result(el(12,"B"));counter(r,10,40,{{12.3,1}});r.tick(40);auto c=r.takeReady();require(c.size()==1&&c[0].kind=="burst"&&c[0].kills==1,"high damage fight lost or overcounted");});
+    test("unsettled counter at a boundary keeps the names",[]{RuleEngine r;counter(r,0,9.5);r.result(kd(10,"A"));r.result(kd(12,"B"));counter(r,10,15);r.boundary(15);auto c=r.takeReady();require(c.size()==1&&c[0].kills==2,"credits expected before opponents could die");});
+    test("counter first read during the fight keeps the names",[]{RuleEngine r;r.result(kd(10,"A"));r.result(kd(12,"B"));counter(r,11,40);r.tick(40);auto c=r.takeReady();require(c.size()==1&&c[0].kills==2,"unknown counter baseline capped opponents");});
+    test("credits before the fight are not counted",[]{RuleEngine r;r.result(kd(10,"A"));r.result(kd(12,"B"));counter(r,0,40,{{5,1},{14,1}});r.tick(40);require(r.takeReady().empty(),"earlier credit verified a second opponent");});
+    test("match boundary forgets the kill counter",[]{RuleEngine r;counter(r,0,9.5);r.boundary(9.6);r.result(kd(10,"A"));r.result(kd(12,"B"));counter(r,11,40);r.tick(40);auto c=r.takeReady();require(c.size()==1&&c[0].kills==2,"previous match counter used as baseline");});
     std::cout<<passed<<" rule scenarios passed\n";
 }

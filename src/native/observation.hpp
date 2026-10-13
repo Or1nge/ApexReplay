@@ -51,6 +51,7 @@ public:
         else if(observation.active){active_=true;inactiveSince_=excludedSince_=-1;
             for(const auto& alias:observation.targetAliases)rules_.resolveTarget(alias.first,alias.second);
             for(const auto& correction:observation.resultCorrections)rules_.correctResult(correction.first,correction.second);
+            rules_.killCounter(observation.time,observation.killCount.has_value()&&(observation.kills.has_value()||observation.countersHidden),observation.killDelta);
             if(observation.damageDelta>0){
                 double span=observation.damageAt-observation.damageSince;
                 int count=std::max((observation.damageDelta+499)/500,span>2?int(std::ceil(span/.5)):1);

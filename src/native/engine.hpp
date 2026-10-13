@@ -52,7 +52,7 @@ class CaptureSession {
         const auto& r=baseRules_;
         json rules{{"version",r.version},{"burstDamage",settings.burstDamage},{"burstSeconds",settings.burstSeconds},{"fastBurstDamage",settings.fastBurstDamage},{"fastBurstSeconds",settings.fastBurstSeconds},
             {"resultGraceSeconds",r.resultGraceSeconds},{"fastMergeSeconds",r.fastMergeSeconds},{"bridgeMergeSeconds",r.bridgeMergeSeconds},{"bridgeDamage",r.bridgeDamage},{"bridgeDamageSeconds",r.bridgeDamageSeconds},
-            {"bridgeQuietSeconds",r.bridgeQuietSeconds},{"maxClipSeconds",r.maxClipSeconds},{"splitOverlapSeconds",r.splitOverlapSeconds},{"longPre",settings.longPre},{"longPost",settings.longPost}};
+            {"bridgeQuietSeconds",r.bridgeQuietSeconds},{"maxClipSeconds",r.maxClipSeconds},{"splitOverlapSeconds",r.splitOverlapSeconds},{"killCreditSeconds",r.killCreditSeconds},{"longPre",settings.longPre},{"longPost",settings.longPost}};
         auto notify=notify_;
         try{recorder_.store(std::make_shared<DevRecorder>(std::filesystem::path(wide(settings.outputDirectory))/L"开发者记录"/name.str(),
             json{{"settings",settingsJson(settings)},{"rules",rules},{"hudVersion",HudDigits::version},{"resultTrackingVersion",OwnFeedAttribution::version},{"startedAt",qpcSeconds()-epoch_}},

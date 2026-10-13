@@ -14,12 +14,13 @@ namespace apex {
 enum class ResultKind { Knockdown, Elimination, Assist, SquadWipe };
 inline const char* resultKindName(ResultKind kind){constexpr const char* names[]={"knockdown","elimination","assist","squad_wipe"};return names[static_cast<int>(kind)];}
 struct Rules {
-    std::string version = "apex-zh-v3-results";
+    std::string version = "apex-zh-v4-kill-counter";
     double burstDamage=250, burstSeconds=5, fastBurstDamage=150, fastBurstSeconds=2;
     double resultGraceSeconds=2, fastMergeSeconds=12, bridgeMergeSeconds=20;
     double bridgeDamage=60, bridgeDamageSeconds=3, bridgeQuietSeconds=6;
     double maxClipSeconds=90, splitOverlapSeconds=2;
     double longPre=10, longPost=5;
+    double killCreditSeconds=10;
 };
 struct CombatEvent {
     double time=0;
@@ -66,6 +67,7 @@ class RuleEngine {
     std::optional<double> splitStart_;
     std::vector<ClipPlan> ready_;
     double lastWipe_=-100;
+    std::deque<std::pair<double,int>> killCredits_;double counterSince_=-1,counterSeen_=-100;
     std::function<void(RuleNote)> trace_;
     void note(RuleNote value) const { if (trace_) trace_(std::move(value)); }
     static std::string identity(const CombatEvent& e) {
@@ -124,27 +126,42 @@ class RuleEngine {
         }
         return unnamed;
     }
-    std::string discardReason(const Candidate& c) const {
-        return "只有 "+std::to_string(c.opponents.size())+" 名敌人且伤害未达标：5 秒内最高 "+std::to_string(c.bestSum)+"（需 ≥"+std::to_string(int(rules_.burstDamage))+
+    // Names come from OCR, so one misread opponent becomes two names. The kill counter is read from digit templates
+    // and Apex credits a knock to the knocker once that opponent dies, so a real multikill raises it as well. The
+    // counter must be known before the fight and read again after the credits had time to arrive; otherwise the
+    // names stand. A revived opponent never raises the counter, so it is not counted when the counter settles.
+    size_t opponentCount(const Candidate& c) const {
+        size_t names=c.opponents.size();
+        if(names<2||c.events.empty())return names;
+        double from=c.events.front().time-rules_.resultGraceSeconds;
+        if(counterSince_<0||counterSince_>from||counterSeen_-c.lastResult<rules_.killCreditSeconds)return names;
+        int credits=0;for(const auto& [time,delta]:killCredits_)if(time>=from)credits+=delta;
+        return std::clamp<size_t>(size_t(std::max(credits,0)),1,names);
+    }
+    std::string discardReason(const Candidate& c,size_t opponents) const {
+        return "只有 "+std::to_string(opponents)+" 名敌人且伤害未达标：5 秒内最高 "+std::to_string(c.bestSum)+"（需 ≥"+std::to_string(int(rules_.burstDamage))+
             "），2 秒内最高 "+std::to_string(c.bestPeak)+"（需 >"+std::to_string(int(rules_.fastBurstDamage))+"）";
     }
     void finish(double available,bool forced=false) {
         if (!candidate_) return;
         const auto& c=*candidate_;
-        if (c.opponents.size()>=2 || c.longContinuation || c.highDamage) {
+        size_t opponents=opponentCount(c);
+        if(opponents<c.opponents.size())note({available,"opponents_capped","识别出 "+std::to_string(c.opponents.size())+" 个不同名字，但这段战斗击杀计数只增加 "+
+            std::to_string(opponents)+"，按 "+std::to_string(opponents)+" 名敌人计","",{},opponents});
+        if (opponents>=2 || c.longContinuation || c.highDamage) {
             double start=std::max(0.0,c.firstAction-rules_.longPre);
             if (splitStart_) start=std::max(start,*splitStart_);
             double wanted=c.lastResult+rules_.longPost;
             double end=std::min(wanted,available);
-            std::string reason=c.opponents.size()>=2?"连续击倒或淘汰 "+std::to_string(c.opponents.size())+" 名敌人":
+            std::string reason=opponents>=2?"连续击倒或淘汰 "+std::to_string(opponents)+" 名敌人":
                 c.longContinuation?"长镜头分段的后续部分":"高伤害：5 秒内 "+std::to_string(c.bestSum)+"，2 秒内 "+std::to_string(c.bestPeak);
             if (end>start) {
-                ClipPlan plan{start,end,c.opponents.size()>=2||c.longContinuation?"multikill":"burst",rules_.version,c.events,
-                    forced && end<wanted,c.squadWipe,c.opponents.size(),reason};
-                note({available,"clip_planned",reason,"",{},c.opponents.size(),{},plan});
+                ClipPlan plan{start,end,opponents>=2||c.longContinuation?"multikill":"burst",rules_.version,c.events,
+                    forced && end<wanted,c.squadWipe,opponents,reason};
+                note({available,"clip_planned",reason,"",{},opponents,{},plan});
                 ready_.push_back(std::move(plan));
-            } else note({available,"candidate_discarded","可用画面不足："+reason,"",{},c.opponents.size()});
-        } else note({available,"candidate_discarded",discardReason(c),"",{},c.opponents.size()});
+            } else note({available,"candidate_discarded","可用画面不足："+reason,"",{},opponents});
+        } else note({available,"candidate_discarded",discardReason(c,opponents),"",{},opponents});
         candidate_.reset(); splitStart_.reset();
     }
 public:
@@ -249,12 +266,19 @@ public:
             std::string(event.kind==ResultKind::Assist?"助攻":"计为敌人 ")+(event.kind==ResultKind::Assist?"":target)+(b?"；伤害达标":"；伤害未达标"),
             target,event.kind,candidate_->opponents.size(),stats});
     }
+    // Confirmed kill-counter steps; a baseline jump (capture started mid-match) arrives as a read without a delta.
+    void killCounter(double time,bool readable,int delta){
+        if(!readable||!std::isfinite(time))return;
+        if(counterSince_<0)counterSince_=time;counterSeen_=std::max(counterSeen_,time);
+        if(delta>0)killCredits_.push_back({time,delta});
+        while(!killCredits_.empty()&&time-killCredits_.front().first>300)killCredits_.pop_front();
+    }
     void tick(double now) {
         if (candidate_ && now-candidate_->lastResult>=std::max(rules_.bridgeMergeSeconds,rules_.longPost)) finish(now);
         for (auto it=seen_.begin();it!=seen_.end();) it=now-it->second>300?seen_.erase(it):std::next(it);
         for (auto it=knocked_.begin();it!=knocked_.end();) it=now-it->second.time>300?knocked_.erase(it):std::next(it);
     }
-    void boundary(double available) { finish(available,true); damage_.clear(); knocked_.clear(); seen_.clear();lastWipe_=-100; }
+    void boundary(double available) { finish(available,true); damage_.clear(); knocked_.clear(); seen_.clear();lastWipe_=-100;killCredits_.clear();counterSince_=-1;counterSeen_=-100; }
     bool pending() const { return candidate_.has_value(); }
     void resolveTarget(const std::string& oldTarget,const std::string& target){
         if(oldTarget==target||target.empty())return;

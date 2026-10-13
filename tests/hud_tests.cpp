@@ -7,6 +7,13 @@
 using namespace apex;
 void require(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 void baseline(DamageTracker& tracker,int value=100){tracker.observe(value,0);tracker.observe(value,.1);require(tracker.observe(value,.2).baseline,"baseline not confirmed");}
+// A text-like crop: background colour with a 3 px white stroke every 8 px across its middle rows.
+CpuImage strokes(int width,int height,uint8_t background,uint8_t ink=240){
+    CpuImage out{width,height,std::vector<uint8_t>(size_t(width)*height*4,background)};
+    for(int y=height/4;y<height*3/4;++y)for(int x=2;x<width-2;++x)if(x%8<3){auto p=out.bgra.data()+(size_t(y)*width+x)*4;p[0]=p[1]=p[2]=ink;}
+    return out;
+}
+uint8_t pixel(const CpuImage& image,int x,int y){return image.bgra[(size_t(y)*image.width+x)*4];}
 CpuImage counterRow(const json& config,const std::vector<std::string>& groups){
     std::vector<json> glyphs;int width=8;
     for(const auto& group:groups){glyphs.push_back(nullptr);width+=24;for(char ch:group){auto it=std::find_if(config["templates"].begin(),config["templates"].end(),[&](const auto& g){return g["digit"]==ch-'0';});require(it!=config["templates"].end(),"template missing");glyphs.push_back(*it);width+=int(std::round(it->at("aspect").template get<double>()*32))+3;}width+=20;}
@@ -53,6 +60,20 @@ int main(int argc,char** argv){
         test("damage uses detection time and splits samples over 500",[]{ObservationRules flow({});Observation o;o.active=true;o.time=20;o.damageAt=19;o.damageSince=18;o.damageDelta=600;flow.process(o);auto stats=flow.rules().burstStats(19);require(stats.sum==600&&stats.peak==600,"large sample was discarded or timestamp changed");});
         test("long missing damage is spread at half-second intervals",[]{ObservationRules flow({});Observation o;o.active=true;o.time=11;o.damageAt=10;o.damageSince=0;o.damageDelta=1000;flow.process(o);auto stats=flow.rules().burstStats(10);require(stats.sum==550&&stats.peak==250,"missing interval fabricated an instantaneous burst");});
         test("kill and assist counters alone never create results",[]{ObservationRules flow({});Observation o;o.active=true;o.time=10;o.killDelta=2;o.killCount=2;flow.process(o);flow.rules().tick(40);require(flow.rules().takeReady().empty()&&!flow.rules().pending(),"counter inference affected clips");});
+        test("OCR input enlarges small crops within the OCR size limit",[]{
+            auto name=ocrInput(strokes(259,36,40)),feed=ocrInput(strokes(441,291,40)),wide=ocrInput(strokes(1305,162,40)),tall=ocrInput(strokes(380,1000,40));
+            require(name.width==777&&name.height==108&&feed.width==882&&feed.height==582&&wide.width==1305&&tall.height==2000,"OCR input scale changed");});
+        test("OCR contrast mask is unchanged over dark backgrounds",[]{auto source=strokes(64,24,40);auto mask=ocrInput(source,true);
+            for(int y=0;y<source.height;++y)for(int x=0;x<source.width;++x)require(pixel(mask,x*3+1,y*3+1)==(pixel(source,x,y)>=155?0:255),"dark background mask differs from fixed threshold");});
+        test("OCR contrast mask drops bright backgrounds but keeps text",[]{auto source=strokes(64,24,190,245);auto mask=ocrInput(source,true);
+            require(pixel(mask,4*3+1,12*3+1)==255&&pixel(mask,1*3+1,12*3+1)==255,"bright background became ink");require(pixel(mask,9*3+1,12*3+1)==0,"text lost on bright background");});
+        test("OCR enlargement is bilinear, not stair-stepped",[]{CpuImage edge{2,1,{0,0,0,255,255,255,255,255}};auto big=ocrInput(edge);
+            require(big.width==6&&pixel(big,0,0)==0&&pixel(big,5,0)==255&&pixel(big,2,0)>0&&pixel(big,2,0)<pixel(big,3,0)&&pixel(big,3,0)<255,"edge not interpolated");});
+        test("observed kill counter limits misread opponents",[]{ObservationRules flow({});Observation o;o.active=true;o.countersHidden=true;o.killCount=0;
+            for(int i=0;i<=80;++i){o.time=i*.5;o.events.clear();o.killDelta=0;
+                if(i==20)o.events={{10,ResultKind::Knockdown,"EnemyA","",1}};if(i==26)o.events={{13,ResultKind::Elimination,"Different","",1}};
+                if(i==27){o.countersHidden=false;o.kills=o.killCount=1;o.killDelta=1;}flow.process(o);}
+            require(flow.rules().takeReady().empty()&&!flow.rules().pending(),"misread opponent counted after one kill credit");});
         test("developer JSON parses after every append and replaces invalid UTF-8",[&]{
             DevRecorder recorder(temporary/"session.json",{{"ocrLanguage","zh-Hans-CN"}},180);
             for(int i=0;i<12;++i){recorder.append({{"type","prompt"},{"t",double(i)},{"text",std::string("名字")+char(0xff)}});auto doc=json::parse(std::ifstream(temporary/"session.json"));require(doc["entries"].size()==size_t(i+1),"append is not complete JSON");}

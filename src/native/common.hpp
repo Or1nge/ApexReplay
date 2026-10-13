@@ -68,10 +68,10 @@ inline Rules loadRules(const std::filesystem::path& p) {
     READ_RULE(burstDamage);READ_RULE(burstSeconds);READ_RULE(fastBurstDamage);READ_RULE(fastBurstSeconds);
     READ_RULE(resultGraceSeconds);READ_RULE(fastMergeSeconds);READ_RULE(bridgeMergeSeconds);
     READ_RULE(bridgeDamage);READ_RULE(bridgeDamageSeconds);READ_RULE(bridgeQuietSeconds);
-    READ_RULE(maxClipSeconds);READ_RULE(splitOverlapSeconds);READ_RULE(longPre);READ_RULE(longPost);
+    READ_RULE(maxClipSeconds);READ_RULE(splitOverlapSeconds);READ_RULE(longPre);READ_RULE(longPost);READ_RULE(killCreditSeconds);
 #undef READ_RULE
     if(r.fastMergeSeconds<0 || r.bridgeMergeSeconds<r.fastMergeSeconds || r.burstSeconds<=0 ||
-        r.maxClipSeconds<40 || r.maxClipSeconds>180) throw std::runtime_error("Invalid rule configuration");
+        r.maxClipSeconds<40 || r.maxClipSeconds>180 || r.killCreditSeconds<0 || r.killCreditSeconds>r.bridgeMergeSeconds) throw std::runtime_error("Invalid rule configuration");
     return r;
 }
 struct Settings {
