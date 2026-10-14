@@ -16,7 +16,7 @@ inline json clipJson(const ClipPlan& c) {
 }
 inline json optionalJson(const std::optional<int>& value){return value?json(*value):json(nullptr);}
 struct Observation {
-    double time=0;bool active=false,firing=false,reload=false,hitFeedback=false,countersHidden=false,damageBaseline=false,feedRead=false;
+    double time=0;bool active=false,firing=false,reload=false,hitFeedback=false,countersHidden=false,damageBaseline=false,feedRead=false,playerNameConfirmed=false;
     std::optional<int> ammo,totalDamage,confirmedDamage,kills,assists,killCount,assistCount;
     std::optional<bool> ownFeedKnock;
     std::string weapon,status,prompt,playerName,ownFeedTarget,excludedBy,feedText;
@@ -29,7 +29,7 @@ struct Observation {
         json eventsJson=json::array();for(const auto& e:events)eventsJson.push_back(eventJson(e));
         json feedJson=json::array();for(const auto& f:feed)feedJson.push_back({{"victim",f.victim},{"knock",f.knock},{"id",f.id}});
         json out{{"time",time},{"active",active},{"firing",firing},{"reload",reload},{"hitFeedback",hitFeedback},
-            {"weapon",weapon},{"magazine",magazine},{"damageDelta",damageDelta},{"status",status},{"prompt",prompt},{"events",eventsJson},{"playerName",playerName},{"ownFeedTarget",ownFeedTarget},{"targetAliases",targetAliases},{"resultCorrections",resultCorrections},
+            {"weapon",weapon},{"magazine",magazine},{"damageDelta",damageDelta},{"status",status},{"prompt",prompt},{"events",eventsJson},{"playerName",playerName},{"playerNameConfirmed",playerNameConfirmed},{"ownFeedTarget",ownFeedTarget},{"targetAliases",targetAliases},{"resultCorrections",resultCorrections},
             {"countersHidden",countersHidden},{"killDelta",killDelta},{"assistDelta",assistDelta},{"excludedBy",excludedBy},{"ownFeed",feedJson},{"feedRead",feedRead},{"feedText",feedText}};
         out["ammo"]=optionalJson(ammo);out["totalDamage"]=optionalJson(totalDamage);out["confirmedDamage"]=optionalJson(confirmedDamage);
         out["kills"]=optionalJson(kills);out["assists"]=optionalJson(assists);out["killCount"]=optionalJson(killCount);out["assistCount"]=optionalJson(assistCount);
@@ -39,7 +39,7 @@ struct Observation {
 // Healing, the map and grenades hide the ammo HUD for seconds at a time, so only a long gap or a lasting
 // spectator / recap / champion screen ends the match; a damage counter reset ends it at once.
 class ObservationRules {
-    RuleEngine rules_;double inactiveSince_=-1,excludedSince_=-1;bool active_=false;
+    RuleEngine rules_;double inactiveSince_=-1,excludedSince_=-1,counterMismatchSince_=-1;bool active_=false;
     std::function<void(double,std::string)> trace_;
 public:
     explicit ObservationRules(Rules rules):rules_(std::move(rules)){}
@@ -51,6 +51,10 @@ public:
         else if(observation.active){active_=true;inactiveSince_=excludedSince_=-1;
             for(const auto& alias:observation.targetAliases)rules_.resolveTarget(alias.first,alias.second);
             for(const auto& correction:observation.resultCorrections)rules_.correctResult(correction.first,correction.second);
+            bool mismatch=observation.kills&&observation.killCount&&*observation.kills<*observation.killCount;
+            if(mismatch){if(counterMismatchSince_<0)counterMismatchSince_=observation.time;
+                if(observation.time-counterMismatchSince_>=1)rules_.invalidateKillCounter(observation.time);}
+            else counterMismatchSince_=-1;
             rules_.killCounter(observation.time,observation.killCount.has_value()&&(observation.kills.has_value()||observation.countersHidden),observation.killDelta);
             if(observation.damageDelta>0){
                 double span=observation.damageAt-observation.damageSince;
@@ -61,6 +65,7 @@ public:
             }
             for(const auto& event:observation.events)rules_.result(event);
         }else if(active_){
+            counterMismatchSince_=-1;
             if(inactiveSince_<0)inactiveSince_=observation.time;
             if(observation.excludedBy.empty())excludedSince_=-1;else if(excludedSince_<0)excludedSince_=observation.time;
             if(excludedSince_>=0&&observation.time-excludedSince_>=3){boundary(observation.time,"排除画面持续至少 3 秒："+observation.excludedBy);cut=true;}
@@ -68,6 +73,6 @@ public:
         }
         rules_.tick(observation.time);return cut;
     }
-    void boundary(double time,std::string reason="采集结束"){rules_.boundary(time);active_=false;inactiveSince_=excludedSince_=-1;if(trace_)trace_(time,std::move(reason));}
+    void boundary(double time,std::string reason="采集结束"){rules_.boundary(time);active_=false;inactiveSince_=excludedSince_=counterMismatchSince_=-1;if(trace_)trace_(time,std::move(reason));}
 };
 }

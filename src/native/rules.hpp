@@ -67,7 +67,7 @@ class RuleEngine {
     std::optional<double> splitStart_;
     std::vector<ClipPlan> ready_;
     double lastWipe_=-100;
-    std::deque<std::pair<double,int>> killCredits_;double counterSince_=-1,counterSeen_=-100;
+    std::deque<std::pair<double,int>> killCredits_;double counterSince_=-1,counterSeen_=-100;bool counterReliable_=true;
     std::function<void(RuleNote)> trace_;
     void note(RuleNote value) const { if (trace_) trace_(std::move(value)); }
     static std::string identity(const CombatEvent& e) {
@@ -132,7 +132,7 @@ class RuleEngine {
     // names stand. A revived opponent never raises the counter, so it is not counted when the counter settles.
     size_t opponentCount(const Candidate& c) const {
         size_t names=c.opponents.size();
-        if(names<2||c.events.empty())return names;
+        if(names<2||c.events.empty()||!counterReliable_)return names;
         double from=c.events.front().time-rules_.resultGraceSeconds;
         if(counterSince_<0||counterSince_>from||counterSeen_-c.lastResult<rules_.killCreditSeconds)return names;
         int credits=0;for(const auto& [time,delta]:killCredits_)if(time>=from)credits+=delta;
@@ -273,12 +273,16 @@ public:
         if(delta>0)killCredits_.push_back({time,delta});
         while(!killCredits_.empty()&&time-killCredits_.front().first>300)killCredits_.pop_front();
     }
+    void invalidateKillCounter(double time){
+        if(counterReliable_)note({time,"kill_counter_unreliable","击杀读数持续低于此前确认值，本局不再用该计数压低已识别的敌人数"});
+        counterReliable_=false;
+    }
     void tick(double now) {
         if (candidate_ && now-candidate_->lastResult>=std::max(rules_.bridgeMergeSeconds,rules_.longPost)) finish(now);
         for (auto it=seen_.begin();it!=seen_.end();) it=now-it->second>300?seen_.erase(it):std::next(it);
         for (auto it=knocked_.begin();it!=knocked_.end();) it=now-it->second.time>300?knocked_.erase(it):std::next(it);
     }
-    void boundary(double available) { finish(available,true); damage_.clear(); knocked_.clear(); seen_.clear();lastWipe_=-100;killCredits_.clear();counterSince_=-1;counterSeen_=-100; }
+    void boundary(double available) { finish(available,true); damage_.clear(); knocked_.clear(); seen_.clear();lastWipe_=-100;killCredits_.clear();counterSince_=-1;counterSeen_=-100;counterReliable_=true; }
     bool pending() const { return candidate_.has_value(); }
     void resolveTarget(const std::string& oldTarget,const std::string& target){
         if(oldTarget==target||target.empty())return;

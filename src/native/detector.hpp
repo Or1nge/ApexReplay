@@ -38,16 +38,16 @@ public:
 class HudDetector {
     LocalOcr ocr_;std::optional<int> ammo_;
     DamageTracker damage_;CounterTracker kills_,assists_;
-    double shotAt_=-100,lastActive_=0,stateReadAt_=-100;
+    double shotAt_=-100,lastActive_=0,stateReadAt_=-100,countersEmptySince_=-1;
     unsigned magazine_=1;std::string weapon_,stateText_;
     std::optional<int> risingAmmo_;std::string changingWeapon_;
     OwnFeedAttribution attribution_;double nameReadAt_=-100,feedReadAt_=-100;
     ResultPrompts results_;
     std::filesystem::path playerFile_;std::string savedPlayer_;
     void savePlayer()noexcept{
-        if(playerFile_.empty()||attribution_.playerName().empty()||savedPlayer_==attribution_.playerName())return;
+        if(playerFile_.empty()||!attribution_.playerConfirmed()||attribution_.playerName().empty()||savedPlayer_==attribution_.playerName())return;
         try{std::filesystem::create_directories(playerFile_.parent_path());auto temporary=playerFile_;temporary+=L".tmp";
-            {std::ofstream out(temporary,std::ios::binary);out<<json{{"playerName",attribution_.playerName()}}.dump()<<'\n';out.flush();if(!out)return;}
+            {std::ofstream out(temporary,std::ios::binary);out<<json{{"playerName",attribution_.playerName()},{"confirmed",true}}.dump()<<'\n';out.flush();if(!out)return;}
             if(MoveFileExW(temporary.c_str(),playerFile_.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))savedPlayer_=attribution_.playerName();
         }catch(...){} // Remembering an ID must never interrupt capture.
     }
@@ -57,11 +57,11 @@ public:
         wchar_t local[32768]{};auto size=GetEnvironmentVariableW(L"LOCALAPPDATA",local,DWORD(std::size(local)));
         if(!size||size>=std::size(local))return;playerFile_=std::filesystem::path(local)/L"ApexPerif"/L"player-id.json";
         try{auto data=json::parse(std::ifstream(playerFile_));auto name=data.value("playerName",std::string());
-            if(!name.empty()&&name.size()<=128){attribution_.rememberPlayer(name);savedPlayer_=attribution_.playerName();}}
+            if(!name.empty()&&name.size()<=128){bool confirmed=data.value("confirmed",false);attribution_.rememberPlayer(name,confirmed);if(confirmed)savedPlayer_=attribution_.playerName();}}
         catch(...){}
     }
     std::string language()const{return ocr_.language();}
-    void reset(){ammo_.reset();risingAmmo_.reset();damage_.reset();kills_.reset();assists_.reset();magazine_=1;weapon_.clear();changingWeapon_.clear();results_.reset();shotAt_=-100;lastActive_=0;stateReadAt_=-100;stateText_.clear();attribution_.reset();nameReadAt_=feedReadAt_=-100;}
+    void reset(){ammo_.reset();risingAmmo_.reset();damage_.reset();kills_.reset();assists_.reset();magazine_=1;weapon_.clear();changingWeapon_.clear();results_.reset();shotAt_=-100;lastActive_=0;stateReadAt_=-100;countersEmptySince_=-1;stateText_.clear();attribution_.reset();nameReadAt_=feedReadAt_=-100;}
     Observation process(const std::array<CpuImage,8>& images,double time,bool controllerFire=false) {
         Observation obs;obs.time=time;
         obs.ammo=HudDigits::read(cropCpu(images[2],{.578,.193,.130,.223}),2,true);
@@ -101,18 +101,24 @@ public:
         obs.active=obs.ammo.has_value()&&battleLayout&&!excluded;
         obs.status=excluded?"非本人战斗画面":obs.active?(obs.totalDamage?"HUD 已识别":"HUD 已识别 · 伤害数字不可读"):"等待战斗画面";
         if(obs.active){
-            if(time-nameReadAt_>=.5){auto name=ocr_.read(images[6]),contrast=ocr_.read(images[6],true);attribution_.observeName(name,&contrast);savePlayer();nameReadAt_=time;}
+            if(time-nameReadAt_>=.5){auto name=ocr_.read(images[6]),contrast=ocr_.read(images[6],true);attribution_.observeName(name,&contrast);nameReadAt_=time;}
             if(time-feedReadAt_>=.3){auto feed=ocr_.read(images[7]),gold=ocr_.read(images[7],true,false,true);obs.feed=attribution_.observeFeed(feed,time,&images[7],&gold);obs.feedRead=true;
                 for(const auto& line:feed.lines)obs.feedText+=(obs.feedText.empty()?"":" | ")+line;
                 obs.feedText+=" | 金色姓名识别："+gold.text;feedReadAt_=time;}
-            obs.playerName=attribution_.playerName();if(auto result=attribution_.recentResult(time)){obs.ownFeedTarget=result->victim;obs.ownFeedKnock=result->knock;}
+            savePlayer();obs.playerName=attribution_.playerName();obs.playerNameConfirmed=attribution_.playerConfirmed();if(auto result=attribution_.recentResult(time)){obs.ownFeedTarget=result->victim;obs.ownFeedKnock=result->knock;}
         }
+        else countersEmptySince_=-1;
         // A monotonic, repeated counter reading is the only source of damage quantities; the last confirmed
         // value survives frames where the rolling number cannot be read. XP / reward numbers in the center
         // prompt never enter this path.
         if(obs.active){
             auto killReading=counters.hidden?std::optional<int>(0):counters.kills,assistReading=counters.hidden?std::optional<int>(0):counters.assists;
-            bool countersReset=(killReading&&kills_.value()&&*killReading<*kills_.value())||(assistReading&&assists_.value()&&*assistReading<*assists_.value());
+            // A correction from 8 to 7 kills in a live fight is not a new match. Require
+            // both counters at zero and near-zero damage for a sustained fresh scoreboard.
+            bool emptyScore=killReading&&assistReading&&*killReading==0&&*assistReading==0&&obs.totalDamage&&*obs.totalDamage<=100&&
+                ((kills_.value()&&*kills_.value()>0)||(assists_.value()&&*assists_.value()>0));
+            if(emptyScore){if(countersEmptySince_<0)countersEmptySince_=time;}else countersEmptySince_=-1;
+            bool countersReset=countersEmptySince_>=0&&time-countersEmptySince_>=1;
             auto change=damage_.observe(obs.totalDamage,time,countersReset);
             if(change.reset){reset();obs.status="伤害计数重置，开始新对局";obs.active=false;}
             else{

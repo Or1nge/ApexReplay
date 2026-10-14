@@ -46,7 +46,7 @@ public:
         std::unique_lock lock(mutex_);if(!enabled_)return;
         try{
             json hud{{"type","hud"},{"active",o.active},{"status",o.status},{"damage",optionalJson(o.totalDamage)},{"kills",optionalJson(o.kills)},{"assists",optionalJson(o.assists)},
-                {"confirmedDamage",optionalJson(o.confirmedDamage)},{"killCount",optionalJson(o.killCount)},{"assistCount",optionalJson(o.assistCount)},{"ammo",optionalJson(o.ammo)},{"countersHidden",o.countersHidden},{"playerName",o.playerName}};
+                {"confirmedDamage",optionalJson(o.confirmedDamage)},{"killCount",optionalJson(o.killCount)},{"assistCount",optionalJson(o.assistCount)},{"ammo",optionalJson(o.ammo)},{"countersHidden",o.countersHidden},{"playerName",o.playerName},{"playerNameConfirmed",o.playerNameConfirmed}};
             if(hud!=lastHud_||o.time-lastHudAt_>=10){lastHud_=hud;lastHudAt_=o.time;hud["t"]=o.time;appendLocked(std::move(hud));}
             if(o.damageDelta>0)appendLocked({{"type","damage"},{"t",o.time},{"delta",o.damageDelta},{"total",optionalJson(o.confirmedDamage)},{"at",o.damageAt},{"since",o.damageSince},{"firing",o.firing},{"magazine",o.magazine}});
             if(o.damageBaseline)appendLocked({{"type","damage_baseline"},{"t",o.time},{"total",optionalJson(o.confirmedDamage)}});

@@ -15,9 +15,9 @@ struct FeedEntry {std::string victim;bool knock=false;double time=0;std::string 
 // Track visible own feed rows; OCR supplies their names, never another event for the same row.
 class OwnFeedAttribution {
     using Mask=std::array<unsigned char,128*20>;
-    struct Row {std::string victim;bool knock=false;double y=0,h=0;Mask mask{};double aspect=0;};
+    struct Row {std::string victim;bool knock=false;double y=0,h=0;Mask mask{};double aspect=0;OcrWord bounds;bool bleeding=false;};
     struct Track {Row row;unsigned id=0;double first=-100,last=-100;int hits=0;bool historical=false,reported=false;std::string reportedName;int nameHits=1;};
-    std::string own_,pendingName_;int nameHits_=0;bool seeded_=false;unsigned nextId_=0;
+    std::string own_,pendingName_,feedName_;int nameHits_=0,feedNameHits_=0;double feedNameAt_=-100;bool seeded_=false,confirmedName_=false;unsigned nextId_=0;
     Mask ownGlyph_{};double ownAspect_=0;
     std::vector<Track> tracks_;std::vector<std::pair<std::string,std::string>> aliases_;
     static std::string identifier(std::string text,bool player=false){
@@ -44,10 +44,11 @@ class OwnFeedAttribution {
             for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)if(y+dy>=0&&y+dy<20&&x+dx>=0&&x+dx<128)found|=to[size_t(y+dy)*128+x+dx]!=0;if(!found)++miss;}return ink>=20&&miss<=ink*tolerance;};return coverage(a,b)&&coverage(b,a);
     }
 public:
-    static constexpr const char* version="apex-results-v5-feed-resume";
-    void reset(){pendingName_.clear();nameHits_=0;seeded_=false;tracks_.clear();aliases_.clear();ownGlyph_={};ownAspect_=0;}
-    void rememberPlayer(const std::string& name){own_=identifier(name,true);reset();}
+    static constexpr const char* version="apex-results-v6-verified-player";
+    void reset(){pendingName_.clear();feedName_.clear();nameHits_=feedNameHits_=0;feedNameAt_=-100;seeded_=false;tracks_.clear();aliases_.clear();ownGlyph_={};ownAspect_=0;}
+    void rememberPlayer(const std::string& name,bool confirmed=true){own_=identifier(name,true);confirmedName_=confirmed;reset();}
     const std::string& playerName()const{return own_;}
+    bool playerConfirmed()const{return confirmedName_;}
     void observeName(const OcrRead& read,const OcrRead* fallback=nullptr){
         auto candidate=[](const OcrRead& input){
             const OcrWord* first=nullptr;for(const auto& w:input.words)if(w.x<.16&&w.y+w.h/2>.2&&w.y<.85&&!identifier(w.text).empty()&&(!first||w.x<first->x))first=&w;
@@ -58,14 +59,28 @@ public:
         auto name=candidate(read);if(fallback){auto alternate=candidate(*fallback);if(nameCharacters(alternate).size()>nameCharacters(name).size()||(!own_.empty()&&alternate==own_))name=alternate;}
         if(nameCharacters(name).size()<2||nameCharacters(name).size()>32){pendingName_.clear();nameHits_=0;return;}
         if(name==pendingName_)++nameHits_;else{pendingName_=name;nameHits_=1;}
-        if(name==own_||(!own_.empty()&&similarTarget(name,own_)))return;
-        if(nameHits_>=(own_.empty()?3:20)){own_=name;seeded_=false;tracks_.clear();aliases_.clear();ownGlyph_={};ownAspect_=0;}
+        // Repeated HUD errors must never overwrite a remembered ID. A different ID needs
+        // agreement with the gold own-player name in the feed, on separate frames.
+        if(own_.empty()&&nameHits_>=3){own_=name;confirmedName_=false;}
     }
     std::vector<FeedEntry> observeFeed(const OcrRead& read,double time,const CpuImage* image=nullptr,const OcrRead* fallback=nullptr){
-        std::vector<FeedEntry> confirmed;if(own_.empty())return confirmed;
+        std::vector<FeedEntry> confirmed;
+        if(image&&nameHits_>=3){
+            auto goldCandidate=[&](const OcrRead& input){auto words=input.words;std::sort(words.begin(),words.end(),[](const auto& a,const auto& b){return a.x<b.x;});
+                for(size_t i=0;i<words.size();++i){auto actor=words[i];if(actor.h<.035||identifier(actor.text).empty())continue;std::string text=actor.text;
+                    for(size_t j=i;;){if(identifier(text,true)==pendingName_){auto mask=rowMask(*image,actor,true);if(std::count(mask.begin(),mask.end(),1)>=30)return true;break;}
+                        do{++j;}while(j<words.size()&&!sameLine(actor,words[j]));if(j==words.size()||words[j].x-actor.x-actor.w>.08)break;
+                        text+=words[j].text;actor.w=words[j].x+words[j].w-actor.x;}
+                }return false;};
+            bool agrees=goldCandidate(read)||(fallback&&goldCandidate(*fallback));
+            if(agrees){if(feedName_==pendingName_&&time-feedNameAt_<=1&&time>feedNameAt_)++feedNameHits_;else{feedName_=pendingName_;feedNameHits_=1;}feedNameAt_=time;
+                if(feedNameHits_>=2){if(own_!=pendingName_){own_=pendingName_;tracks_.clear();aliases_.clear();ownGlyph_={};ownAspect_=0;}confirmedName_=true;}}
+            else{feedNameHits_=0;feedName_.clear();}
+        }
+        if(own_.empty())return confirmed;
         auto parseRows=[&](const OcrRead& input){std::vector<OcrWord> words=input.words;
         std::sort(words.begin(),words.end(),[](const auto& a,const auto& b){return a.x<b.x;});std::vector<Row> rows;
-        for(size_t i=0;i<words.size();++i){OcrWord actor=words[i];std::string name=actor.text;
+        for(size_t i=0;i<words.size();++i){OcrWord actor=words[i];if(actor.h<.035||identifier(actor.text).empty())continue;std::string name=actor.text;
             auto ownActor=[&]{auto normalized=identifier(name,true);if(normalized==own_){if(image){ownGlyph_=rowMask(*image,actor,true);ownAspect_=actor.w/actor.h;}return true;}
                 if(!image||ownAspect_<=0)return false;auto candidate=nameCharacters(normalized),known=nameCharacters(own_);
                 return candidate.size()>=2&&known.size()>=3&&nameDistance(candidate,known)<=1&&std::abs(actor.w/actor.h-ownAspect_)<=ownAspect_*.2&&sameMask(rowMask(*image,actor,true),ownGlyph_,.08);};
@@ -85,7 +100,7 @@ public:
             if(characters.empty()||(characters.size()==1&&characters.front()<128))continue;
             bool knock=image&&redPixels(*image,actor.x+actor.w,victim.front().x,actor.y-actor.h*.2,actor.y+actor.h*1.2)>=12;
             auto bounds=victim.front();double right=bounds.x+bounds.w,bottom=bounds.y+bounds.h;for(const auto& word:victim){right=std::max(right,word.x+word.w);bottom=std::max(bottom,word.y+word.h);bounds.y=std::min(bounds.y,word.y);}bounds.w=right-bounds.x;bounds.h=bottom-bounds.y;
-            rows.push_back({target,knock,actor.y+actor.h/2,actor.h,image?rowMask(*image,bounds):Mask{},bounds.w/bounds.h});
+            rows.push_back({target,knock,actor.y+actor.h/2,actor.h,image?rowMask(*image,bounds):Mask{},bounds.w/bounds.h,bounds,bleeding});
         }
         return rows;};auto rows=parseRows(read);
         // Both OCR variants describe one frame; combine rows before confirmation, never count
@@ -100,11 +115,18 @@ public:
         for(int pass=0;pass<2;++pass)for(size_t i=0;i<rows.size();++i)if(assigned[i]<0){int best=-1;double distance=1e9;
             // Looting and healing can hide the combat HUD while the same feed row stays visible.
             // Keep confirmed identities through those gaps; unconfirmed rows still expire quickly.
-            for(size_t j=0;j<tracks_.size();++j)if(!used[j]&&rows[i].knock==tracks_[j].row.knock&&time-tracks_[j].last<=(tracks_[j].reported||tracks_[j].historical?30:3)){
-                bool matches=pass==0?(time-tracks_[j].last<=3?sameOpponentName(rows[i].victim,tracks_[j].row.victim):nameCharacters(rows[i].victim)==nameCharacters(tracks_[j].row.victim)):std::abs(rows[i].aspect-tracks_[j].row.aspect)<=std::max(rows[i].aspect,tracks_[j].row.aspect)*.35&&sameMask(rows[i].mask,tracks_[j].row.mask);
+            for(size_t j=0;j<tracks_.size();++j)if(!used[j]&&rows[i].knock==tracks_[j].row.knock&&rows[i].bleeding==tracks_[j].row.bleeding&&time-tracks_[j].last<=(tracks_[j].reported||tracks_[j].historical?30:3)){
+                const auto& prior=tracks_[j].row;auto shifted=prior.bounds;shifted.y+=rows[i].y-prior.y;
+                bool samePixels=pass==1&&image&&std::abs(rows[i].bounds.x+rows[i].bounds.w-prior.bounds.x-prior.bounds.w)<.025&&
+                    sameMask(rowMask(*image,shifted),prior.mask,.08);
+                bool matches=pass==0?(time-tracks_[j].last<=3?sameOpponentName(rows[i].victim,prior.victim):nameCharacters(rows[i].victim)==nameCharacters(prior.victim)):
+                    samePixels||(std::abs(rows[i].aspect-prior.aspect)<=std::max(rows[i].aspect,prior.aspect)*.35&&sameMask(rows[i].mask,prior.mask));
                 double dy=std::abs(rows[i].y-tracks_[j].row.y);if(matches&&dy<distance){best=int(j);distance=dy;}}
             if(best>=0){assigned[i]=best;used[size_t(best)]=true;}}
-        for(size_t i=0;i<used.size();++i)if(!used[i]&&!tracks_[i].reported)tracks_[i].hits=0;
+        // An OCR miss does not break two-read confirmation while the same name pixels remain
+        // on screen. It never adds a hit: a second OCR observation is still required.
+        for(size_t i=0;i<used.size();++i)if(!used[i]&&!tracks_[i].reported){auto& track=tracks_[i];
+            if(image&&sameMask(rowMask(*image,track.row.bounds),track.row.mask,.08))track.last=time;else track.hits=0;}
         for(size_t i=0;i<rows.size();++i){if(assigned[i]<0){tracks_.push_back({rows[i],++nextId_,time,time,1,!seeded_,false});continue;}
             auto& track=tracks_[size_t(assigned[i])];if(time-track.last>.9)track.hits=0;track.last=time;++track.hits;
             track.nameHits=track.row.victim==rows[i].victim?track.nameHits+1:1;
