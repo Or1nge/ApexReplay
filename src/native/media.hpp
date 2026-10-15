@@ -258,37 +258,37 @@ class ExportQueue {
                 // Keep the AAC encoder's priming timestamp so the MP4 edit list compensates its delay.
                 int status=av_interleaved_write_frame(out,encoded);av_packet_free(&encoded);ffcheck(status,"write mixed audio packet");mixedAudio=true;
             });
-            constexpr const char* names[]={"Video","Mixed audio","Apex","Microphone","Other desktop"};
-            for(int i=0;i<5;++i){
+            // Save only the mix so players and sharing apps cannot pick one of the separate inputs instead.
+            constexpr const char* names[]={"Video","Mixed audio"};
+            for(int i=0;i<2;++i){
                 auto s=avformat_new_stream(out,nullptr);if(!s)throw std::bad_alloc();
                 if(i==0)ffcheck(avcodec_parameters_copy(s->codecpar,job.codecs->parameters[0]),"copy output video stream");
-                else if(i==1){auto parameters=mixer.parameters();int status=avcodec_parameters_copy(s->codecpar,parameters);avcodec_parameters_free(&parameters);ffcheck(status,"copy mixed audio stream");}
-                else ffcheck(avcodec_parameters_copy(s->codecpar,job.codecs->parameters[i-1]),"copy separate audio stream");
-                s->time_base=i==1?mixer.timebase():job.codecs->timebases[i==0?0:i-1];s->codecpar->codec_tag=i==0?(s->codecpar->codec_id==AV_CODEC_ID_HEVC?MKTAG('h','v','c','1'):MKTAG('a','v','c','1')):0;
+                else{auto parameters=mixer.parameters();int status=avcodec_parameters_copy(s->codecpar,parameters);avcodec_parameters_free(&parameters);ffcheck(status,"copy mixed audio stream");}
+                s->time_base=i==1?mixer.timebase():job.codecs->timebases[0];s->codecpar->codec_tag=i==0?(s->codecpar->codec_id==AV_CODEC_ID_HEVC?MKTAG('h','v','c','1'):MKTAG('a','v','c','1')):0;
                 av_dict_set(&s->metadata,"title",names[i],0);av_dict_set(&s->metadata,"handler_name",names[i],0);
-                s->disposition=i==1?AV_DISPOSITION_DEFAULT:0;
+                s->disposition=AV_DISPOSITION_DEFAULT;
             }
             ffcheck(avio_open(&out->pb,pathUtf8(partial).c_str(),AVIO_FLAG_WRITE),"open output directory");
             AVDictionary* opts=nullptr;av_dict_set(&opts,"movflags","+faststart",0);int h=avformat_write_header(out,&opts);av_dict_free(&opts);ffcheck(h,"write MP4 header");
             for(auto& packet:job.packets){
-                // Consume audio through this packet before releasing its manual-export reference; the same
-                // encoded packet is also copied into its separate track without another lossy encode.
+                // Consume audio through this packet before releasing its manual-export reference.
                 auto duration=packet->stream==0?int64_t{0}:(packet->data->duration>0?packet->data->duration:av_rescale_q(1024,AVRational{1,48000},packet->timebase));
                 mixer.mixUntil(av_rescale_q(packet->data->pts+duration,packet->timebase,AVRational{1,48000})-static_cast<int64_t>(std::llround(job.actualStart*48000)));
-                AVPacket* p=av_packet_clone(packet->data);if(!p)throw std::bad_alloc();
-                int i=packet->stream==0?0:packet->stream+1;p->stream_index=i;
-                av_packet_rescale_ts(p,packet->timebase,out->streams[i]->time_base);
-                auto offset=av_rescale_q(static_cast<int64_t>(std::llround(job.actualStart*1000000)),AVRational{1,1000000},out->streams[i]->time_base);
-                p->pts-=offset;p->dts-=offset;
-                if(p->pts>=0 && p->dts>=0){int ret=av_interleaved_write_frame(out,p);av_packet_free(&p);ffcheck(ret,"write clip packet");}else av_packet_free(&p);
+                if(packet->stream==0){
+                    AVPacket* p=av_packet_clone(packet->data);if(!p)throw std::bad_alloc();p->stream_index=0;
+                    av_packet_rescale_ts(p,packet->timebase,out->streams[0]->time_base);
+                    auto offset=av_rescale_q(static_cast<int64_t>(std::llround(job.actualStart*1000000)),AVRational{1,1000000},out->streams[0]->time_base);
+                    p->pts-=offset;p->dts-=offset;
+                    if(p->pts>=0 && p->dts>=0){int ret=av_interleaved_write_frame(out,p);av_packet_free(&p);ffcheck(ret,"write clip packet");}else av_packet_free(&p);
+                }
                 job.packetWritten(packet);
             }
             mixer.finish(audioEnd);if(!mixedAudio)throw std::runtime_error("片段混音失败，暂不发布为正式文件");
             for(auto& packet:job.packets)job.packetWritten(packet);
             ffcheck(av_write_trailer(out),"finalize MP4");ffcheck(avio_closep(&out->pb),"close MP4");avformat_free_context(out);out=nullptr;
             AVFormatContext* check=nullptr;ffcheck(avformat_open_input(&check,pathUtf8(partial).c_str(),nullptr,nullptr),"validate MP4");
-            int ret=avformat_find_stream_info(check,nullptr);bool valid=ret>=0 && check->nb_streams==5 && check->streams[0]->codecpar->codec_id==job.codecs->parameters[0]->codec_id&&check->streams[0]->codecpar->width==job.codecs->parameters[0]->width&&check->streams[0]->codecpar->height==job.codecs->parameters[0]->height;
-            if(valid)for(unsigned i=1;i<5;++i)valid=valid&&check->streams[i]->codecpar->codec_id==AV_CODEC_ID_AAC&&check->streams[i]->codecpar->sample_rate==48000&&check->streams[i]->codecpar->ch_layout.nb_channels==2&&bool(check->streams[i]->disposition&AV_DISPOSITION_DEFAULT)==(i==1);
+            int ret=avformat_find_stream_info(check,nullptr);bool valid=ret>=0 && check->nb_streams==2 && check->streams[0]->codecpar->codec_id==job.codecs->parameters[0]->codec_id&&check->streams[0]->codecpar->width==job.codecs->parameters[0]->width&&check->streams[0]->codecpar->height==job.codecs->parameters[0]->height;
+            if(valid)valid=check->streams[1]->codecpar->codec_id==AV_CODEC_ID_AAC&&check->streams[1]->codecpar->sample_rate==48000&&check->streams[1]->codecpar->ch_layout.nb_channels==2;
             avformat_close_input(&check);if(!valid)throw std::runtime_error("导出的 MP4 未通过完整性检查");
             std::filesystem::rename(partial,job.file);
         }catch(...){if(out){if(out->pb)avio_closep(&out->pb);avformat_free_context(out);}throw;}

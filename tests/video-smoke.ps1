@@ -23,12 +23,12 @@ foreach($taskCase in $taskCases){
     if($taskStatus[-1].videoTargetBitrateMbps -ne $taskCase.bitrate -or $taskStatus[-1].videoPreset -ne $taskCase.preset){throw 'Configured encoder bitrate or preset mismatch'}
     $taskVideo=Get-ChildItem -LiteralPath $taskDirectory -Filter '*.mp4' | Select-Object -First 1
     $taskStreams=& (Join-Path $PackageDirectory 'ffprobe.exe') -v error -show_entries stream=codec_name,width,height,r_frame_rate,channels:stream_disposition=default -of json $taskVideo.FullName | ConvertFrom-Json
-    if($taskStreams.streams.Count -ne 5 -or $taskStreams.streams[0].codec_name -ne $taskCase.codec){throw 'Exported codecs or track count mismatch'}
-    for($taskAudio=1;$taskAudio -lt 5;$taskAudio++){if($taskStreams.streams[$taskAudio].codec_name -ne 'aac' -or $taskStreams.streams[$taskAudio].channels -ne 2 -or $taskStreams.streams[$taskAudio].disposition.default -ne [int]($taskAudio -eq 1)){throw 'Mixed or separate audio stream mismatch'}}
+    if($taskStreams.streams.Count -ne 2 -or $taskStreams.streams[0].codec_name -ne $taskCase.codec){throw 'Exported codecs or track count mismatch'}
+    if($taskStreams.streams[1].codec_name -ne 'aac' -or $taskStreams.streams[1].channels -ne 2 -or $taskStreams.streams[1].disposition.default -ne 1){throw 'Mixed audio stream mismatch'}
     if($taskStreams.streams[0].width -ne $taskStatus[-1].videoWidth -or $taskStreams.streams[0].height -ne $taskStatus[-1].videoHeight){throw 'Exported resolution mismatch'}
     if($taskStreams.streams[0].r_frame_rate -ne '60/1'){throw 'Exported frame rate mismatch'}
-    $taskResults+=[pscustomobject]@{case=$taskCase.name;codec=$taskStreams.streams[0].codec_name;width=$taskStreams.streams[0].width;height=$taskStreams.streams[0].height;frames=$taskReport.frames;borderHidden=$true;audioTracks=4;defaultMixedAudio=$true;liveDenoiseToggle=$true}
-    Write-Output ('PASS '+$taskCase.name+' '+$taskStreams.streams[0].width+'x'+$taskStreams.streams[0].height+' / 60 fps / default mix + 3 separate audio tracks / hidden border')
+    $taskResults+=[pscustomobject]@{case=$taskCase.name;codec=$taskStreams.streams[0].codec_name;width=$taskStreams.streams[0].width;height=$taskStreams.streams[0].height;frames=$taskReport.frames;borderHidden=$true;audioTracks=1;defaultMixedAudio=$true;liveDenoiseToggle=$true}
+    Write-Output ('PASS '+$taskCase.name+' '+$taskStreams.streams[0].width+'x'+$taskStreams.streams[0].height+' / 60 fps / mixed audio only / hidden border')
 }
 $taskResults | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $taskTest 'summary.json') -Encoding utf8NoBOM
 Write-Output $taskTest
