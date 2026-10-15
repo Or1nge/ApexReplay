@@ -2,6 +2,7 @@
 #include "common.hpp"
 #include "memory_policy.hpp"
 #include "devlog.hpp"
+#include "speech_leveler.hpp"
 namespace apex {
 struct Packet {
     AVPacket* data=nullptr; AVRational timebase{}; int stream=0; double time=0;
@@ -176,6 +177,68 @@ struct CodecSet {
     ~CodecSet(){for(auto& p:parameters)avcodec_parameters_free(&p);}
 };
 struct ExportJob {ClipPlan clip;double actualStart=0,epoch=0;std::vector<PacketRef> packets;std::shared_ptr<CodecSet> codecs;std::filesystem::path file;std::shared_ptr<DevRecorder> recorder;json devSlice;void packetWritten(PacketRef& packet){if(clip.kind=="manual")packet.reset();}};
+// Decode each balanced input on demand. Only one decoded frame per input is held, even for a long manual save.
+class ExportAudioMixer {
+    ExportJob& job_;std::array<AVCodecContext*,3> decoders_{};std::array<AVFrame*,3> frames_{};
+    std::array<size_t,3> cursors_{};std::array<bool,3> ended_{},ready_{};std::array<int64_t,3> framePts_{};
+    int64_t start_=0,inputPts_=0,outputPts_=0;PeakLimiter limiter_;AudioEncoder encoder_;
+    void reset(){for(auto& frame:frames_)av_frame_free(&frame);for(auto& decoder:decoders_)avcodec_free_context(&decoder);}
+    bool decodeNext(int input){
+        auto decoder=decoders_[input];auto frame=frames_[input];av_frame_unref(frame);
+        for(;;){int status=avcodec_receive_frame(decoder,frame);
+            if(status==AVERROR_EOF)return false;
+            if(status!=AVERROR(EAGAIN)){
+                ffcheck(status,"decode export audio");
+                if(frame->format!=AV_SAMPLE_FMT_FLTP||frame->sample_rate!=48000||frame->ch_layout.nb_channels!=2||frame->pts==AV_NOPTS_VALUE)throw std::runtime_error("导出音轨的格式或时间戳无效");
+                framePts_[input]=av_rescale_q(frame->pts,job_.codecs->timebases[input+1],AVRational{1,48000})-start_;return true;
+            }
+            auto& cursor=cursors_[input];
+            while(cursor<job_.packets.size()&&(!job_.packets[cursor]||job_.packets[cursor]->stream!=input+1))++cursor;
+            if(cursor<job_.packets.size()){
+                const auto& packet=job_.packets[cursor++];ffcheck(avcodec_send_packet(decoder,packet->data),"send export audio packet");
+            }else if(!ended_[input]){ffcheck(avcodec_send_packet(decoder,nullptr),"flush export audio decoder");ended_[input]=true;}
+            else throw std::runtime_error("导出音轨解码未正常结束");
+        }
+    }
+    void addInput(int input,int64_t begin,int count,float* left,float* right){
+        int64_t position=begin,end=begin+count;
+        while(position<end){
+            if(!ready_[input]){if(!decodeNext(input))return;ready_[input]=true;}
+            auto frame=frames_[input];int64_t first=framePts_[input],last=first+frame->nb_samples;
+            if(last<=position){ready_[input]=false;continue;}
+            // Missing samples stay silent; timestamps keep independent device starts and gaps in sync with video.
+            if(first>=end)return;int64_t from=std::max(position,first),until=std::min(end,last);
+            auto l=reinterpret_cast<const float*>(frame->extended_data[0]);auto r=reinterpret_cast<const float*>(frame->extended_data[1]);
+            for(int64_t sample=from;sample<until;++sample){left[sample-begin]+=l[sample-first];right[sample-begin]+=r[sample-first];}
+            position=until;if(position==last)ready_[input]=false;
+        }
+    }
+public:
+    ExportAudioMixer(ExportJob& job,std::function<void(PacketRef)> sink):job_(job),start_(static_cast<int64_t>(std::llround(job.actualStart*48000))),encoder_(1,std::move(sink)){
+        try{for(int input=0;input<3;++input){
+            auto parameters=job.codecs->parameters[input+1];auto codec=avcodec_find_decoder(parameters->codec_id);if(!codec)throw std::runtime_error("找不到音轨解码器");
+            auto& decoder=decoders_[input];decoder=avcodec_alloc_context3(codec);frames_[input]=av_frame_alloc();if(!decoder||!frames_[input])throw std::bad_alloc();
+            ffcheck(avcodec_parameters_to_context(decoder,parameters),"copy export audio decoder parameters");decoder->pkt_timebase=job.codecs->timebases[input+1];
+            ffcheck(avcodec_open2(decoder,codec,nullptr),"open export audio decoder");
+        }}catch(...){reset();throw;}
+    }
+    ~ExportAudioMixer(){reset();}
+    AVCodecParameters* parameters()const{return encoder_.parameters();}
+    AVRational timebase()const{return encoder_.timebase();}
+    void mixUntil(int64_t end){
+        while(inputPts_<end){
+            std::array<float,1024> left{},right{},limitedLeft{},limitedRight{};int count=static_cast<int>(std::min<int64_t>(left.size(),end-inputPts_)),written=0;
+            for(int input=0;input<3;++input)addInput(input,inputPts_,count,left.data(),right.data());
+            // Preserve the existing relative gains; reduce only peaks created when the three inputs overlap.
+            for(int sample=0;sample<count;++sample)limiter_.push(left[sample],right[sample],[&](float l,float r){limitedLeft[written]=l;limitedRight[written++]=r;});
+            encoder_.append(limitedLeft.data(),limitedRight.data(),written,outputPts_);outputPts_+=written;inputPts_+=count;
+        }
+    }
+    void finish(int64_t end){
+        mixUntil(end);std::array<float,PeakLimiter::look> left{},right{};int count=0;
+        limiter_.flush([&](float l,float r){left[count]=l;right[count++]=r;});encoder_.append(left.data(),right.data(),count,outputPts_);encoder_.finish();
+    }
+};
 class ExportQueue {
     std::mutex mutex_;std::condition_variable_any cv_;std::deque<ExportJob> queued_,failed_;
     std::jthread thread_;std::function<void(json)> notify_;std::atomic<bool> busy_=false;std::atomic<unsigned> manualPending_=0;
@@ -183,30 +246,49 @@ class ExportQueue {
         auto partial=job.file;partial+=L".partial.mp4";
         AVFormatContext* out=nullptr;ffcheck(avformat_alloc_output_context2(&out,nullptr,"mp4",pathUtf8(partial).c_str()),"create MP4 muxer");
         try {
-            constexpr const char* names[]={"Video","Apex","Microphone","Other desktop"};
-            for(int i=0;i<4;++i){
+            std::array<bool,4> present{};int64_t audioEnd=0;
+            for(const auto& packet:job.packets){present.at(packet->stream)=true;
+                auto duration=packet->data->duration>0?packet->data->duration:av_rescale_q(1,packet->stream==0?AVRational{1,60}:AVRational{1024,48000},packet->timebase);
+                auto end=av_rescale_q(packet->data->pts+duration,packet->timebase,AVRational{1,48000})-static_cast<int64_t>(std::llround(job.actualStart*48000));audioEnd=std::max(audioEnd,end);}
+            for(bool yes:present)if(!yes)throw std::runtime_error("片段缺少视频或音轨，暂不发布为正式文件");
+            bool mixedAudio=false;
+            ExportAudioMixer mixer(job,[&](PacketRef packet){
+                AVPacket* encoded=av_packet_clone(packet->data);if(!encoded)throw std::bad_alloc();encoded->stream_index=1;
+                av_packet_rescale_ts(encoded,packet->timebase,out->streams[1]->time_base);
+                // Keep the AAC encoder's priming timestamp so the MP4 edit list compensates its delay.
+                int status=av_interleaved_write_frame(out,encoded);av_packet_free(&encoded);ffcheck(status,"write mixed audio packet");mixedAudio=true;
+            });
+            constexpr const char* names[]={"Video","Mixed audio","Apex","Microphone","Other desktop"};
+            for(int i=0;i<5;++i){
                 auto s=avformat_new_stream(out,nullptr);if(!s)throw std::bad_alloc();
-                ffcheck(avcodec_parameters_copy(s->codecpar,job.codecs->parameters[i]),"copy output stream");
-                s->time_base=job.codecs->timebases[i];s->codecpar->codec_tag=i==0?(s->codecpar->codec_id==AV_CODEC_ID_HEVC?MKTAG('h','v','c','1'):MKTAG('a','v','c','1')):0;
+                if(i==0)ffcheck(avcodec_parameters_copy(s->codecpar,job.codecs->parameters[0]),"copy output video stream");
+                else if(i==1){auto parameters=mixer.parameters();int status=avcodec_parameters_copy(s->codecpar,parameters);avcodec_parameters_free(&parameters);ffcheck(status,"copy mixed audio stream");}
+                else ffcheck(avcodec_parameters_copy(s->codecpar,job.codecs->parameters[i-1]),"copy separate audio stream");
+                s->time_base=i==1?mixer.timebase():job.codecs->timebases[i==0?0:i-1];s->codecpar->codec_tag=i==0?(s->codecpar->codec_id==AV_CODEC_ID_HEVC?MKTAG('h','v','c','1'):MKTAG('a','v','c','1')):0;
                 av_dict_set(&s->metadata,"title",names[i],0);av_dict_set(&s->metadata,"handler_name",names[i],0);
                 s->disposition=i==1?AV_DISPOSITION_DEFAULT:0;
             }
             ffcheck(avio_open(&out->pb,pathUtf8(partial).c_str(),AVIO_FLAG_WRITE),"open output directory");
             AVDictionary* opts=nullptr;av_dict_set(&opts,"movflags","+faststart",0);int h=avformat_write_header(out,&opts);av_dict_free(&opts);ffcheck(h,"write MP4 header");
-            std::array<bool,4> present{};
             for(auto& packet:job.packets){
+                // Consume audio through this packet before releasing its manual-export reference; the same
+                // encoded packet is also copied into its separate track without another lossy encode.
+                auto duration=packet->stream==0?int64_t{0}:(packet->data->duration>0?packet->data->duration:av_rescale_q(1024,AVRational{1,48000},packet->timebase));
+                mixer.mixUntil(av_rescale_q(packet->data->pts+duration,packet->timebase,AVRational{1,48000})-static_cast<int64_t>(std::llround(job.actualStart*48000)));
                 AVPacket* p=av_packet_clone(packet->data);if(!p)throw std::bad_alloc();
-                int i=packet->stream;p->stream_index=i;
+                int i=packet->stream==0?0:packet->stream+1;p->stream_index=i;
                 av_packet_rescale_ts(p,packet->timebase,out->streams[i]->time_base);
                 auto offset=av_rescale_q(static_cast<int64_t>(std::llround(job.actualStart*1000000)),AVRational{1,1000000},out->streams[i]->time_base);
                 p->pts-=offset;p->dts-=offset;
-                if(p->pts>=0 && p->dts>=0){int ret=av_interleaved_write_frame(out,p);av_packet_free(&p);ffcheck(ret,"write clip packet");present[i]=true;}else av_packet_free(&p);
+                if(p->pts>=0 && p->dts>=0){int ret=av_interleaved_write_frame(out,p);av_packet_free(&p);ffcheck(ret,"write clip packet");}else av_packet_free(&p);
                 job.packetWritten(packet);
             }
-            for(bool yes:present)if(!yes)throw std::runtime_error("片段缺少视频或音轨，暂不发布为正式文件");
+            mixer.finish(audioEnd);if(!mixedAudio)throw std::runtime_error("片段混音失败，暂不发布为正式文件");
+            for(auto& packet:job.packets)job.packetWritten(packet);
             ffcheck(av_write_trailer(out),"finalize MP4");ffcheck(avio_closep(&out->pb),"close MP4");avformat_free_context(out);out=nullptr;
             AVFormatContext* check=nullptr;ffcheck(avformat_open_input(&check,pathUtf8(partial).c_str(),nullptr,nullptr),"validate MP4");
-            int ret=avformat_find_stream_info(check,nullptr);bool valid=ret>=0 && check->nb_streams==4 && check->streams[0]->codecpar->codec_id==job.codecs->parameters[0]->codec_id&&check->streams[0]->codecpar->width==job.codecs->parameters[0]->width&&check->streams[0]->codecpar->height==job.codecs->parameters[0]->height;
+            int ret=avformat_find_stream_info(check,nullptr);bool valid=ret>=0 && check->nb_streams==5 && check->streams[0]->codecpar->codec_id==job.codecs->parameters[0]->codec_id&&check->streams[0]->codecpar->width==job.codecs->parameters[0]->width&&check->streams[0]->codecpar->height==job.codecs->parameters[0]->height;
+            if(valid)for(unsigned i=1;i<5;++i)valid=valid&&check->streams[i]->codecpar->codec_id==AV_CODEC_ID_AAC&&check->streams[i]->codecpar->sample_rate==48000&&check->streams[i]->codecpar->ch_layout.nb_channels==2&&bool(check->streams[i]->disposition&AV_DISPOSITION_DEFAULT)==(i==1);
             avformat_close_input(&check);if(!valid)throw std::runtime_error("导出的 MP4 未通过完整性检查");
             std::filesystem::rename(partial,job.file);
         }catch(...){if(out){if(out->pb)avio_closep(&out->pb);avformat_free_context(out);}throw;}
