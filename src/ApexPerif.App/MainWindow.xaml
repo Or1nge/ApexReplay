@@ -380,7 +380,7 @@
       <TextBlock x:Name="CriteriaSection" Text="保存标准" Style="{StaticResource Section}"/>
       <Border Style="{StaticResource Card}">
        <StackPanel>
-        <TextBlock Text="同时满足两项伤害条件，并确认击倒、淘汰或助攻。" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="20,16,20,6"/>
+        <TextBlock Text="所有自动片段（含连杀）都须同时满足两项伤害条件，并确认击倒、淘汰或助攻。" Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="20,16,20,6"/>
         <Grid Style="{StaticResource Row}"><TextBlock Text="统计时长" VerticalAlignment="Center"/>
          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <Slider Width="170" Minimum="1" Maximum="15" TickFrequency=".5" Value="{Binding BurstSeconds, UpdateSourceTrigger=PropertyChanged}"/>
@@ -409,7 +409,7 @@
           <TextBlock Text="伤害" Style="{StaticResource Muted}" Width="32" Margin="8,0,0,0"/>
          </StackPanel></Grid>
         <Border Style="{StaticResource Rule}"/>
-        <Grid Style="{StaticResource Row}"><TextBlock Text="连续击倒多人" VerticalAlignment="Center"/><TextBlock Text="自动保存长镜头" Style="{StaticResource Muted}" HorizontalAlignment="Right"/></Grid>
+        <Grid Style="{StaticResource Row}"><TextBlock Text="连续击倒多人" VerticalAlignment="Center" ToolTip="伤害达标才自动保存；长镜头的每个分段也须达标"/><TextBlock Text="伤害达标后保存长镜头" Style="{StaticResource Muted}" HorizontalAlignment="Right"/></Grid>
        </StackPanel>
       </Border>
 

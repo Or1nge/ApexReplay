@@ -14,7 +14,7 @@ namespace apex {
 enum class ResultKind { Knockdown, Elimination, Assist, SquadWipe };
 inline const char* resultKindName(ResultKind kind){constexpr const char* names[]={"knockdown","elimination","assist","squad_wipe"};return names[static_cast<int>(kind)];}
 struct Rules {
-    std::string version = "apex-zh-v4-kill-counter";
+    std::string version = "apex-zh-v5-damage-gated";
     double burstDamage=250, burstSeconds=5, fastBurstDamage=150, fastBurstSeconds=2;
     double resultGraceSeconds=2, fastMergeSeconds=12, bridgeMergeSeconds=20;
     double bridgeDamage=60, bridgeDamageSeconds=3, bridgeQuietSeconds=6;
@@ -76,10 +76,10 @@ class RuleEngine {
     static std::string victimToken(ResultKind kind,const std::string& target){
         std::string token="victim:"+std::to_string(static_cast<int>(kind));for(auto c:nameCharacters(target))token+=":"+std::to_string(c);return token;
     }
-    std::optional<Burst> burst(double time) const {
+    std::optional<Burst> burst(double time,std::optional<double> minimum={}) const {
         for(size_t i=0;i<damage_.size();++i){
             const auto& first=damage_[i];
-            if(first.time>time||time-first.time>rules_.burstSeconds+rules_.resultGraceSeconds)continue;
+            if((minimum&&first.time<*minimum)||first.time>time||time-first.time>rules_.burstSeconds+rules_.resultGraceSeconds)continue;
             int sum=0,peak=0;double end=first.time;size_t last=i;
             for(size_t j=i;j<damage_.size();++j){const auto& d=damage_[j];if(d.time-first.time>rules_.burstSeconds||d.time>time)break;sum+=d.damage;end=d.time;last=j;}
             if(sum<rules_.burstDamage||time-end>rules_.resultGraceSeconds)continue;
@@ -139,7 +139,7 @@ class RuleEngine {
         return std::clamp<size_t>(size_t(std::max(credits,0)),1,names);
     }
     std::string discardReason(const Candidate& c,size_t opponents) const {
-        return "只有 "+std::to_string(opponents)+" 名敌人且伤害未达标：5 秒内最高 "+std::to_string(c.bestSum)+"（需 ≥"+std::to_string(int(rules_.burstDamage))+
+        return "确认 "+std::to_string(opponents)+" 名敌人，但伤害未达标：5 秒内最高 "+std::to_string(c.bestSum)+"（需 ≥"+std::to_string(int(rules_.burstDamage))+
             "），2 秒内最高 "+std::to_string(c.bestPeak)+"（需 >"+std::to_string(int(rules_.fastBurstDamage))+"）";
     }
     void finish(double available,bool forced=false) {
@@ -148,12 +148,13 @@ class RuleEngine {
         size_t opponents=opponentCount(c);
         if(opponents<c.opponents.size())note({available,"opponents_capped","识别出 "+std::to_string(c.opponents.size())+" 个不同名字，但这段战斗击杀计数只增加 "+
             std::to_string(opponents)+"，按 "+std::to_string(opponents)+" 名敌人计","",{},opponents});
-        if (opponents>=2 || c.longContinuation || c.highDamage) {
+        // Every automatic clip, including multikills and split continuations, needs a qualified damage window.
+        if (c.highDamage) {
             double start=std::max(0.0,c.firstAction-rules_.longPre);
             if (splitStart_) start=std::max(start,*splitStart_);
             double wanted=c.lastResult+rules_.longPost;
             double end=std::min(wanted,available);
-            std::string reason=opponents>=2?"连续击倒或淘汰 "+std::to_string(opponents)+" 名敌人":
+            std::string reason=opponents>=2?"连续击倒或淘汰 "+std::to_string(opponents)+" 名敌人；伤害达标":
                 c.longContinuation?"长镜头分段的后续部分":"高伤害：5 秒内 "+std::to_string(c.bestSum)+"，2 秒内 "+std::to_string(c.bestPeak);
             if (end>start) {
                 ClipPlan plan{start,end,opponents>=2||c.longContinuation?"multikill":"burst",rules_.version,c.events,
@@ -175,11 +176,11 @@ public:
         rules_.burstSeconds=std::clamp(seconds,1.0,15.0);rules_.burstDamage=std::clamp(damage,50.0,2000.0);
         rules_.fastBurstSeconds=std::clamp(fastSeconds,.5,rules_.burstSeconds);rules_.fastBurstDamage=std::clamp(fastDamage,0.0,1000.0);
     }
-    BurstStats burstStats(double time) const {
+    BurstStats burstStats(double time,std::optional<double> minimum={}) const {
         BurstStats best;
         for(size_t i=0;i<damage_.size();++i){
             const auto& first=damage_[i];
-            if(first.time>time||time-first.time>rules_.burstSeconds+rules_.resultGraceSeconds)continue;
+            if((minimum&&first.time<*minimum)||first.time>time||time-first.time>rules_.burstSeconds+rules_.resultGraceSeconds)continue;
             int sum=0,peak=0;double end=first.time;size_t last=i;
             for(size_t j=i;j<damage_.size();++j){const auto& d=damage_[j];if(d.time-first.time>rules_.burstSeconds||d.time>time)break;sum+=d.damage;end=d.time;last=j;}
             if(time-end>rules_.resultGraceSeconds)continue;
@@ -187,7 +188,7 @@ public:
             if(sum>best.sum){best.sum=sum;best.start=first.time;best.end=end;}
             best.peak=std::max(best.peak,peak);
         }
-        if(auto b=burst(time)){best.qualified=true;best.start=b->start;best.end=b->end;}
+        if(auto b=burst(time,minimum)){best.qualified=true;best.start=b->start;best.end=b->end;}
         return best;
     }
     void damage(DamageSample sample) {
@@ -224,8 +225,8 @@ public:
                 return;
             }
         }
-        auto b=burst(event.time);
-        auto stats=burstStats(event.time);
+        auto b=burst(event.time,splitStart_);
+        auto stats=burstStats(event.time,splitStart_);
         if (event.kind==ResultKind::Assist && !b) {
             note({event.time,"assist_ignored","助攻但伤害未达标，不保存","",event.kind,candidate_?candidate_->opponents.size():0,stats});
             return;
@@ -247,13 +248,15 @@ public:
             double post=rules_.longPost;
             if (event.time+post-beginning>rules_.maxClipSeconds) {
                 double priorEnd=candidate_->lastResult+post;
-                continuingLong=candidate_->opponents.size()>=2 || candidate_->longContinuation;
+                continuingLong=candidate_->highDamage&&(candidate_->opponents.size()>=2 || candidate_->longContinuation);
                 finish(event.time);
                 splitStart_=std::max(0.0,priorEnd-rules_.splitOverlapSeconds);
+                b=burst(event.time,splitStart_);stats=burstStats(event.time,splitStart_);action=b?b->start:event.time;
             }
         }
         bool fresh=!candidate_;
         if (!candidate_) candidate_=Candidate{action,event.time,continuingLong,false,false,{},{}};
+        candidate_->firstAction=std::min(candidate_->firstAction,action);
         candidate_->highDamage|=b.has_value();
         candidate_->bestSum=std::max(candidate_->bestSum,stats.sum);
         candidate_->bestPeak=std::max(candidate_->bestPeak,stats.peak);

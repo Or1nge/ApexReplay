@@ -10,12 +10,12 @@ namespace apex {struct PacketRingTestAccess {
 };}
 int main(){av_log_set_level(AV_LOG_ERROR);int passed=0;auto test=[&](const char* name,auto body){body();++passed;std::cout<<"PASS "<<name<<'\n';};
     try{
-        test("missing damage HUD still permits confirmed multikill results",[]{ObservationRules flow({});Observation observation;
-            observation.active=true;observation.ammo=20;observation.time=10;observation.events={{10,ResultKind::Knockdown,"enemy-a","confirmed own prompt",1}};flow.process(observation);
-            observation.events.clear();for(double t=10.1;t<15;t+=.1){observation.time=t;require(!flow.process(observation),"unreadable damage counter cut the fight");}
+        test("missing damage HUD preserves results but cannot bypass damage criteria",[]{for(bool qualified:{false,true}){ObservationRules flow({});Observation observation;
+            observation.active=true;observation.ammo=20;observation.time=10;observation.damageDelta=qualified?250:0;observation.damageAt=9;observation.damageSince=8.9;observation.events={{10,ResultKind::Knockdown,"enemy-a","confirmed own prompt",1}};flow.process(observation);
+            observation.damageDelta=0;observation.events.clear();for(double t=10.1;t<15;t+=.1){observation.time=t;require(!flow.process(observation),"unreadable damage counter cut the fight");}
             observation.time=15;observation.events={{15,ResultKind::Knockdown,"enemy-b","confirmed own prompt",1}};flow.process(observation);
             observation.events.clear();observation.time=36;flow.process(observation);auto clips=flow.rules().takeReady();
-            require(clips.size()==1&&clips[0].kind=="multikill"&&clips[0].kills==2,"missing damage HUD lost confirmed results");});
+            require(clips.size()==size_t(qualified),"missing damage HUD bypassed criteria or lost qualified fight");if(qualified)require(clips[0].kind=="multikill"&&clips[0].kills==2,"missing damage HUD lost confirmed results");}});
         test("microphone denoiser reduces steady noise and retains a voice-band tone",[]{MicDenoiser denoiser;std::array<float,480> left{},right{};unsigned random=1234567;
             double inputNoise=0,outputNoise=0,sine=0,cosine=0;size_t inputCount=0,outputCount=0,toneCount=0;int64_t end=0;
             auto sink=[&](float* l,float* r,int n,int64_t pts){require(pts==end,"denoiser broke sample timestamps");end=pts+n;for(int i=0;i<n;++i){require(std::isfinite(l[i])&&std::isfinite(r[i]),"denoiser produced nonfinite samples");double t=double(pts+i)/48000;

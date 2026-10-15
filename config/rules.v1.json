@@ -1,5 +1,5 @@
 {
-  "version": "apex-zh-v4-kill-counter",
+  "version": "apex-zh-v5-damage-gated",
   "burstDamage": 250,
   "burstSeconds": 5.0,
   "fastBurstDamage": 150,
