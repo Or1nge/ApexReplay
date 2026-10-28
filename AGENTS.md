@@ -40,24 +40,23 @@ done
 ```
 - On Windows, run `./scripts/build.ps1` to compile the worker/WPF app and run all C++ tests.
 - Windows-only code cannot compile on macOS; inspect its diff carefully and report what remains unverified.
-- When the brief authorizes a branch push, push it and let `.github/workflows/build.yml` run on the Windows runner.
+- When a branch push is authorized (by the delegation brief, or by the user when there is no brief), push it and let `.github/workflows/build.yml` run on the Windows runner.
 - Build runs on every branch push, builds/tests the package, and uploads the package and UI screenshots.
 - Find the run for the pushed commit; use `gh run watch <id> --exit-status` and inspect failed steps.
 - Fix failures within the authorized scope, push again, and repeat until green; do not claim hosted CI proves real GPU/game capture.
 
 ## Scope and local files
-- Follow the brief's authorization boundaries; do not commit, push, publish or create tags unless authorized.
+- When working from a delegation brief, follow its authorization boundaries. Without a brief, the user's current request sets them. Do not commit, push, publish or create tags unless authorized.
 - Never commit `artifacts/`: it is gitignored local material, including fixtures and frames from YouTube videos.
 - Never commit build output (`build/`, `dist/`, `bin/`, `obj/`) or local toolchains (`.tools/`).
 - Keep temporary scripts/intermediates in a task subdirectory; clean up only files you created, retaining reusable scripts.
 - Do not delete existing files or introduce unrelated dependencies or changes.
-- Keep Mihomo available; never disable its kernel/TUN without a confirmed independent timed restore.
 
 ## Release and documentation
 - Pushing a `v*` tag runs `.github/workflows/release.yml` and publishes a GitHub Release.
 - Release notes belong in `.github/release-notes/<tag>.md`; the first line is `# title`.
 - The version lives in `src/ApexPerif.App/ApexPerif.App.csproj` and the default in `scripts/package.ps1`.
-- Only create release tags or edit release notes when the brief explicitly asks; ordinary branch pushes are builds, not releases.
-- `README.md`, `docs/VALIDATION.md` and release notes are user-facing Chinese documents written by Claude.
-- Do not edit those documents unless asked; put the facts Claude needs in your report instead.
+- Only create release tags or edit release notes when explicitly asked (in the brief or by the user). Ordinary branch pushes are builds, not releases.
+- `README.md`, `docs/VALIDATION.md` and release notes are user-facing Chinese documents.
+- Do not edit them unless asked. Put facts that need updating there in your report instead.
 - Finish with result, files changed, verification evidence, assumptions and open issues; state which Windows checks ran.
