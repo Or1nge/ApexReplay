@@ -6,6 +6,7 @@ using System.Windows.Media;
 namespace ApexPerif;
 public record Microphone(string Id, string Name);
 public record VideoOption(string Id,string Name);
+public record AudioOutput(string Id,string Name);
 public sealed class ViewModel : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -26,6 +27,7 @@ public sealed class ViewModel : INotifyPropertyChanged
     private bool ready,running,retry,startWithWindows,micNoiseSuppression=true;
     private string gameAudioStatus="未采集",micAudioStatus="未采集",desktopAudioStatus="未采集",micVoice="",desktopVoice="";
     private readonly DateTime[] lastSpeech=new DateTime[3];
+    private bool voiceEnabled,songPlaying;private string voiceOutputId="",songPath="",songTrigger="squad_wipe",voiceStatus="未开启";private double songGainDb=-12;
     private System.Windows.Media.Brush statusBrush=new SolidColorBrush(System.Windows.Media.Color.FromRgb(115,131,153));
     public string OutputDirectory { get=>output;set{if(Set(ref output,value)){Changed(nameof(OutputDisplay));SettingsChanged?.Invoke();}} }
     public string OutputDisplay => string.IsNullOrWhiteSpace(output)?"未选择":output;
@@ -130,7 +132,21 @@ public sealed class ViewModel : INotifyPropertyChanged
     public bool Retry {get=>retry;set{if(Set(ref retry,value))Changed(nameof(RetryVisibility));}}
     public System.Windows.Visibility RetryVisibility=>retry?System.Windows.Visibility.Visible:System.Windows.Visibility.Collapsed;
     public ObservableCollection<Microphone> Microphones {get;}=[new("","默认通信设备")];
-    public object Settings()=>new {outputDirectory=OutputDirectory,microphoneId=MicrophoneId,micNoiseSuppression=MicNoiseSuppression,developerMode=DeveloperMode,videoResolution=VideoResolution,videoCodec=VideoCodec,videoBitrateMbps=VideoBitrateMbps,videoPreset=VideoPreset,shortPre=ShortPre,shortPost=ShortPost,longPre=LongPre,longPost=LongPost,balance=Balance,controllerFire="LB",replayMinutes=ReplayMinutes,memoryPercent=MemoryPercent,theme=Theme,startWithWindows=StartWithWindows,burstSeconds=BurstSeconds,burstDamage=BurstDamage,fastBurstSeconds=FastBurstSeconds,fastBurstDamage=FastBurstDamage};
+    // Virtual microphone: the selected microphone goes unchanged into a virtual cable, with a song added on request.
+    public bool VoiceEnabled {get=>voiceEnabled;set{if(Set(ref voiceEnabled,value))SettingsChanged?.Invoke();}}
+    public string VoiceOutputId {get=>voiceOutputId;set{if(Set(ref voiceOutputId,value??""))SettingsChanged?.Invoke();}}
+    public ObservableCollection<AudioOutput> VoiceOutputs {get;}=[new("","自动（CABLE Input）")];
+    public string SongPath {get=>songPath;set{if(Set(ref songPath,value??"")){Changed(nameof(SongDisplay));SettingsChanged?.Invoke();}}}
+    public string SongDisplay=>string.IsNullOrWhiteSpace(songPath)?"未选择":System.IO.Path.GetFileName(songPath);
+    public string SongTrigger {get=>songTrigger;set{if(Set(ref songTrigger,value is "off" or "elimination" or "result"?value:"squad_wipe"))SettingsChanged?.Invoke();}}
+    public IReadOnlyList<VideoOption> SongTriggers {get;}=[new("squad_wipe","灭队时"),new("elimination","每次淘汰"),new("result","每次击倒或淘汰"),new("off","只手动试播")];
+    public double SongGainDb {get=>songGainDb;set{if(double.IsFinite(value)&&Set(ref songGainDb,Math.Clamp(Math.Round(value),-40,0)))SettingsChanged?.Invoke();}}
+    public string VoiceStatus {get=>voiceStatus;set=>Set(ref voiceStatus,value);}
+    public bool SongPlaying {get=>songPlaying;set{if(Set(ref songPlaying,value)){Changed(nameof(SongButtonText));Changed(nameof(SongButtonIcon));}}}
+    public string SongButtonText=>songPlaying?"停止":"试播";
+    public string SongButtonIcon=>songPlaying?"\uE71A":"\uE768";
+    public object VoiceSettings()=>new {enabled=VoiceEnabled,microphoneId=MicrophoneId,outputId=VoiceOutputId,songPath=SongPath,songGainDb=SongGainDb,trigger=SongTrigger};
+    public object Settings()=>new {outputDirectory=OutputDirectory,microphoneId=MicrophoneId,micNoiseSuppression=MicNoiseSuppression,developerMode=DeveloperMode,videoResolution=VideoResolution,videoCodec=VideoCodec,videoBitrateMbps=VideoBitrateMbps,videoPreset=VideoPreset,shortPre=ShortPre,shortPost=ShortPost,longPre=LongPre,longPost=LongPost,balance=Balance,controllerFire="LB",replayMinutes=ReplayMinutes,memoryPercent=MemoryPercent,theme=Theme,startWithWindows=StartWithWindows,burstSeconds=BurstSeconds,burstDamage=BurstDamage,fastBurstSeconds=FastBurstSeconds,fastBurstDamage=FastBurstDamage,voiceEnabled=VoiceEnabled,voiceOutputId=VoiceOutputId,songPath=SongPath,songGainDb=SongGainDb,songTrigger=SongTrigger};
     public void Load(JsonElement s)
     {
         if(s.TryGetProperty("outputDirectory",out var o))OutputDirectory=o.GetString()??"";
@@ -154,5 +170,10 @@ public sealed class ViewModel : INotifyPropertyChanged
         if(s.TryGetProperty("burstDamage",out var damage))BurstDamage=damage.GetDouble();
         if(s.TryGetProperty("fastBurstSeconds",out var fastWindow))FastBurstSeconds=fastWindow.GetDouble();
         if(s.TryGetProperty("fastBurstDamage",out var fastDamage))FastBurstDamage=fastDamage.GetDouble();
+        if(s.TryGetProperty("voiceEnabled",out var voice))VoiceEnabled=voice.GetBoolean();
+        if(s.TryGetProperty("voiceOutputId",out var voiceOutput))VoiceOutputId=voiceOutput.GetString()??"";
+        if(s.TryGetProperty("songPath",out var song))SongPath=song.GetString()??"";
+        if(s.TryGetProperty("songGainDb",out var songGain))SongGainDb=songGain.GetDouble();
+        if(s.TryGetProperty("songTrigger",out var trigger))SongTrigger=trigger.GetString()??"squad_wipe";
     }
 }

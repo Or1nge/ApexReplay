@@ -5,9 +5,9 @@
 - The C++20 worker in `src/native` captures video/audio, detects HUD events and exports clips.
 - UI and worker communicate through a named pipe; check existing message shapes and APIs before editing.
 - Portable headers: `image.hpp`, `names.hpp`, `digits.hpp`, `hud_tracking.hpp`, `hud_attribution.hpp`,
-  `hud_results.hpp`, `rules.hpp`, `observation.hpp`, `devlog.hpp`, `memory_policy.hpp`, `speech_leveler.hpp`.
+  `hud_results.hpp`, `rules.hpp`, `observation.hpp`, `devlog.hpp`, `memory_policy.hpp`, `speech_leveler.hpp`, `voice_mix.hpp`.
 - Windows-only: `common.hpp`, `detector.hpp`, `engine.hpp`, `media.hpp`, `gpu.hpp`, `audio.hpp`,
-  `mic_denoiser.hpp`, `selftest.hpp`, `main.cpp`, and all C#/XAML. Keep Windows includes out of portable headers.
+  `mic_denoiser.hpp`, `voice.hpp`, `selftest.hpp`, `main.cpp`, and all C#/XAML. Keep Windows includes out of portable headers.
 - `config/` contains rule settings and HUD glyph templates; `tests/` contains native scenarios and smoke scripts.
 - Read the relevant project documentation before work; preserve existing uncommitted changes.
 
@@ -34,7 +34,8 @@ mkdir -p build
 clang++ -std=c++20 -O2 -Wall tests/rules_tests.cpp -o build/rules_tests && build/rules_tests
 clang++ -std=c++20 -O2 -Wall tests/hud_tests.cpp -o build/hud_tests && build/hud_tests
 clang++ -std=c++20 -O2 -Wall tests/speech_tests.cpp -o build/speech_tests && build/speech_tests
-for h in image names digits hud_tracking hud_attribution hud_results rules observation devlog memory_policy speech_leveler; do
+clang++ -std=c++20 -O2 -Wall tests/voice_tests.cpp -o build/voice_tests && build/voice_tests
+for h in image names digits hud_tracking hud_attribution hud_results rules observation devlog memory_policy speech_leveler voice_mix; do
   clang++ -std=c++20 -fsyntax-only -Wall -Wno-pragma-once-outside-header -x c++ src/native/$h.hpp || exit 1
 done
 ```

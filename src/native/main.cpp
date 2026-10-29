@@ -1,5 +1,6 @@
 #include "engine.hpp"
 #include "selftest.hpp"
+#include "voice.hpp"
 #include <sddl.h>
 using namespace apex;
 class Pipe {
@@ -42,21 +43,26 @@ int wmain(int argc,wchar_t** argv){
         std::wstring mode=argc>1?argv[1]:L"";
         if(mode==L"--inspect-image"&&argc>2){std::cout<<inspectImage(argv[2],argc>3&&std::wstring(argv[3])==L"--gpu").dump(2)<<'\n';return 0;}
         if(mode==L"--test-audio"){playTestTone(argc>2?_wtof(argv[2]):880,argc>3?_wtof(argv[3]):10);return 0;}
+        if(mode==L"--voice-test"){VoiceSettings voiceSettings;voiceSettings.enabled=true;voiceSettings.trigger="off";if(argc>2)voiceSettings.songPath=utf8(argv[2]);
+            VoiceRouter voice([](json j){std::cout<<j.dump()<<std::endl;});voice.configure(voiceSettings);std::this_thread::sleep_for(1s);if(argc>2)voice.play();
+            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int64_t>((argc>3?_wtof(argv[3]):20)*1000)));return 0;}
         if(mode==L"--selftest"&&argc>2){std::cout<<captureSelfTest(argv[2]).dump(2)<<'\n';return 0;}
         if(mode==L"--session-selftest"&&argc>2){Settings testSettings;if(argc>3){std::ifstream input(argv[3]);json settings;input>>settings;testSettings=Settings::fromJson(settings);}std::cout<<sessionSelfTest(argv[2],config,testSettings).dump(2)<<'\n';return 0;}
         if(mode==L"--diagnose"){
             auto window=findApex();Gpu gpu;LocalOcr ocr;
             std::cout<<json{{"captureSupported",winrt::Windows::Graphics::Capture::GraphicsCaptureSession::IsSupported()},
                 {"adapter",gpu.adapter()},{"hevcNvenc",avcodec_find_encoder_by_name("hevc_nvenc")!=nullptr},{"ocrLanguage",ocr.language()},
-                {"microphones",microphones()},{"apexPid",window.pid},{"captureApi","Windows.Graphics.Capture"},
+                {"microphones",microphones()},{"outputs",speakers()},{"apexPid",window.pid},{"captureApi","Windows.Graphics.Capture"},
                 {"replayMinutes",30},{"memoryPercent",60},{"memoryPolicy","min(duration, dynamic idle-memory allowance)"},{"hudVersion",HudDigits::version},{"gameMemoryAccess",false},{"injection",false}}.dump(2)<<'\n';return 0;
         }
         if(mode==L"--analyze"&&argc>=4){
             double from=argc>4?_wtof(argv[4]):0,duration=argc>5?_wtof(argv[5]):60;
             analyzeFile(argv[2],argv[3],from,duration,config);return 0;
         }
-        if(mode!=L"--pipe"||argc<3){std::cout<<"ApexPerif.Worker --pipe NAME | --diagnose | --analyze INPUT OUTPUT.jsonl [START] [SECONDS]\n";return 0;}
-        Pipe pipe(argv[2]);auto notify=[&](json j){pipe.send(std::move(j));};ExportQueue exports(notify);
+        if(mode!=L"--pipe"||argc<3){std::cout<<"ApexPerif.Worker --pipe NAME | --diagnose | --analyze INPUT OUTPUT.jsonl [START] [SECONDS] | --voice-test [SONG] [SECONDS]\n";return 0;}
+        Pipe pipe(argv[2]);VoiceRouter voice([&](json j){pipe.send(std::move(j));});
+        // Own results from the HUD can start the song in the virtual microphone.
+        auto notify=[&](json j){if(j.value("type","")=="event")voice.event(j.at("event").value("kind",std::string()));pipe.send(std::move(j));};ExportQueue exports(notify);
         std::mutex settingsMutex;Settings settings;std::atomic<bool> armed=false,quit=false,stopAnnouncement=false,manualRequest=false;std::atomic<unsigned> revision=0;
         std::jthread monitor([&](std::stop_token stop){
             winrt::init_apartment(winrt::apartment_type::multi_threaded);std::unique_ptr<CaptureSession> session;unsigned applied=0;bool waitingAnnounced=false;
@@ -75,7 +81,7 @@ int wmain(int argc,wchar_t** argv){
             }
             session.reset();
         });
-        notify({{"type","ready"},{"microphones",microphones()},{"replayMinutes",30},{"memoryPercent",60},{"codec","hevc"}});
+        notify({{"type","ready"},{"microphones",microphones()},{"outputs",speakers()},{"replayMinutes",30},{"memoryPercent",60},{"codec","hevc"}});
         while(auto message=pipe.read()){
             auto command=message->value("command",std::string());
             if(command=="start"||command=="configure"){
@@ -86,6 +92,9 @@ int wmain(int argc,wchar_t** argv){
             }else if(command=="stop"){notify({{"type","status"},{"state","stopping"}});stopAnnouncement=true;armed=false;}
             else if(command=="save_replay")manualRequest=true;
             else if(command=="retry")exports.retry();
+            else if(command=="voice"){try{voice.configure(VoiceSettings::fromJson(message->at("settings")));}catch(...){notify({{"type","voice_status"},{"state","error"},{"message",errorText()}});}}
+            else if(command=="voice_play")voice.play();
+            else if(command=="voice_stop")voice.stopSong();
             else if(command=="quit"){quit=true;break;}
         }
         quit=true;monitor.request_stop();monitor.join();notify({{"type","exiting"}});return 0;

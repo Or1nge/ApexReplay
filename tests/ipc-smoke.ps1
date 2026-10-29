@@ -22,6 +22,11 @@ try {
         };throw "State $State missing"
     }
     Read-State 'ready' | Out-Null
+    # The virtual microphone reports its state (an error on machines without VB-Cable) and must not stop the worker.
+    $taskWriter.WriteLine((@{command='voice';settings=@{enabled=$true;trigger='result';songGainDb=-12}} | ConvertTo-Json -Compress))
+    $taskVoice=Read-State 'voice_status';if($taskVoice.state -notin @('running','error')){throw "Unexpected voice state $($taskVoice.state)"}
+    $taskWriter.WriteLine('{"command":"voice_play"}')
+    $taskWriter.WriteLine((@{command='voice';settings=@{enabled=$false}} | ConvertTo-Json -Compress))
     $taskWriter.WriteLine(' {"command":"stop"}');Read-State 'stopped' | Out-Null
     $taskSettings=@{outputDirectory=(Join-Path (Split-Path $PSScriptRoot -Parent) 'artifacts\ipc-output');replayMinutes=30;memoryPercent=60}
     $taskWriter.WriteLine((@{command='start';settings=$taskSettings} | ConvertTo-Json -Compress));Read-State 'armed' | Out-Null
@@ -33,7 +38,7 @@ try {
     Read-State 'exiting' | Out-Null
     if(!$taskWorker.WaitForExit(10000)){throw 'Worker failed to exit'}
     if($taskWorker.ExitCode -ne 0){throw $taskWorker.StandardError.ReadToEnd()}
-    Write-Output 'PASS named pipe start / configure / stop / restart / quit'
+    Write-Output "PASS named pipe voice ($($taskVoice.state)) / start / configure / stop / restart / quit"
 } finally {
     if(!$taskWorker.HasExited){$taskWorker.Kill()}
     if($taskReader){$taskReader.Dispose()};if($taskWriter){$taskWriter.Dispose()};$taskPipe.Dispose();$taskWorker.Dispose()

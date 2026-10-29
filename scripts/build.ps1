@@ -15,7 +15,7 @@ $taskFf=(Get-ChildItem -LiteralPath (Join-Path $taskTools 'ffmpeg-extract') -Dir
 $taskCommon=@('/nologo','/std:c++20','/EHsc','/O2','/utf-8','/MT','/permissive-','/D_WIN32_WINNT=0x0A00','/DWINVER=0x0A00','/I'+(Join-Path $taskFf 'include'))
 Push-Location $taskBuild
 try {
-    & cl.exe @taskCommon (Join-Path $taskRoot 'src\native\main.cpp') ('/Fe:'+(Join-Path $taskDist 'ApexPerif.Worker.exe')) /link ('/LIBPATH:'+(Join-Path $taskFf 'lib')) avcodec.lib avformat.lib avutil.lib avfilter.lib swresample.lib swscale.lib d3d11.lib dxgi.lib d3dcompiler.lib windowsapp.lib ole32.lib uuid.lib propsys.lib xinput.lib user32.lib gdi32.lib
+    & cl.exe @taskCommon (Join-Path $taskRoot 'src\native\main.cpp') ('/Fe:'+(Join-Path $taskDist 'ApexPerif.Worker.exe')) /link ('/LIBPATH:'+(Join-Path $taskFf 'lib')) avcodec.lib avformat.lib avutil.lib avfilter.lib swresample.lib swscale.lib d3d11.lib dxgi.lib d3dcompiler.lib windowsapp.lib ole32.lib uuid.lib propsys.lib xinput.lib user32.lib gdi32.lib avrt.lib
     if($LASTEXITCODE -ne 0){throw 'Native worker compilation failed.'}
     if(!$SkipTests) {
         & cl.exe /nologo /std:c++20 /EHsc /O2 /utf-8 /MD (Join-Path $taskRoot 'tests\rules_tests.cpp') ('/Fe:'+(Join-Path $taskBuild 'rules_tests.exe'))
@@ -30,6 +30,10 @@ try {
         if($LASTEXITCODE -ne 0){throw 'Speech leveling tests compilation failed.'}
         & (Join-Path $taskBuild 'speech_tests.exe')
         if($LASTEXITCODE -ne 0){throw 'Speech leveling tests failed.'}
+        & cl.exe /nologo /std:c++20 /EHsc /O2 /utf-8 /MD (Join-Path $taskRoot 'tests\voice_tests.cpp') ('/Fe:'+(Join-Path $taskBuild 'voice_tests.exe'))
+        if($LASTEXITCODE -ne 0){throw 'Voice mixing tests compilation failed.'}
+        & (Join-Path $taskBuild 'voice_tests.exe')
+        if($LASTEXITCODE -ne 0){throw 'Voice mixing tests failed.'}
         & cl.exe @taskCommon (Join-Path $taskRoot 'tests\native_tests.cpp') ('/Fe:'+(Join-Path $taskBuild 'native_tests.exe')) /link ('/LIBPATH:'+(Join-Path $taskFf 'lib')) avcodec.lib avformat.lib avutil.lib avfilter.lib swresample.lib swscale.lib windowsapp.lib ole32.lib uuid.lib
         if($LASTEXITCODE -ne 0){throw 'Native scenario tests compilation failed.'}
         $env:PATH=(Join-Path $taskFf 'bin')+';'+$env:PATH

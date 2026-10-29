@@ -21,9 +21,12 @@ public partial class MainWindow : Window
     private bool exiting,settingsLoaded,uiPreview;
     private bool restoringStartup;
     private readonly TaskCompletionSource workerReady=new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private string? restoredMicrophoneId;
+    private string? restoredMicrophoneId,restoredVoiceOutputId;
+    private string voiceNote="";private DateTime voiceNoteUntil;
     private readonly Dictionary<int,string> audioErrors=new();
     private readonly DispatcherTimer changes=new(){Interval=TimeSpan.FromMilliseconds(350)};
+    // The virtual microphone runs whether or not capture is running, so its settings go to the worker separately.
+    private readonly DispatcherTimer voiceChanges=new(){Interval=TimeSpan.FromMilliseconds(350)};
     private readonly DispatcherTimer themeClock=new(){Interval=TimeSpan.FromMinutes(1)};
     private readonly string settingsPath=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ApexPerif","settings.json");
     private static readonly SolidColorBrush GoodBrush=Frozen(61,214,140),BusyBrush=Frozen(91,155,255),IdleBrush=Frozen(107,119,137),WarnBrush=Frozen(245,165,36);
@@ -38,7 +41,8 @@ public partial class MainWindow : Window
         bool integration=args.Length>=3&&args[1]=="--integration-smoke",uiSmoke=args.Length>=3&&args[1]=="--ui-smoke";
         try
         {
-            if(!integration&&!uiSmoke&&File.Exists(settingsPath)){using var settings=JsonDocument.Parse(File.ReadAllText(settingsPath));model.Load(settings.RootElement);restoredMicrophoneId=settings.RootElement.TryGetProperty("microphoneId",out var mic)?mic.GetString():null;}
+            if(!integration&&!uiSmoke&&File.Exists(settingsPath)){using var settings=JsonDocument.Parse(File.ReadAllText(settingsPath));model.Load(settings.RootElement);restoredMicrophoneId=settings.RootElement.TryGetProperty("microphoneId",out var mic)?mic.GetString():null;
+                restoredVoiceOutputId=settings.RootElement.TryGetProperty("voiceOutputId",out var output)?output.GetString():null;}
         }
         catch(Exception){model.StatusDetail="设置读取失败，已恢复默认";}
         ApplyTheme();
@@ -50,12 +54,13 @@ public partial class MainWindow : Window
         // The folder can change outside the app (clips deleted or moved), so re-read it whenever the window comes back.
         Activated+=(_,_)=>RefreshClips();
         model.PropertyChanged+=(_,e)=>{if(e.PropertyName==nameof(ViewModel.OutputDirectory))RefreshClips();};
-        model.SettingsChanged+=()=>{if(settingsLoaded){SaveSettings();changes.Stop();changes.Start();}};
+        model.SettingsChanged+=()=>{if(settingsLoaded){SaveSettings();changes.Stop();changes.Start();voiceChanges.Stop();voiceChanges.Start();}};
         model.PropertyChanged+=(_,e)=>{
             if(e.PropertyName==nameof(ViewModel.StartWithWindows)&&settingsLoaded&&!restoringStartup&&!args.Any(arg=>arg.EndsWith("-smoke",StringComparison.Ordinal)))
                 try{StartupRegistration.SetEnabled(model.StartWithWindows);}catch(Exception error){restoringStartup=true;model.StartWithWindows=StartupRegistration.IsEnabled;restoringStartup=false;Error("开机自启设置失败："+error.Message);}
         };
         changes.Tick+=async(_,_)=>{changes.Stop();if(model.Running&&client is not null)try{await client.SendAsync("configure",model.Settings());}catch(Exception e){Error(e.Message);}};
+        voiceChanges.Tick+=async(_,_)=>await SendVoiceAsync();
     }
     private IntPtr WindowMessage(IntPtr hwnd,int message,IntPtr wParam,IntPtr lParam,ref bool handled)
     {
@@ -88,6 +93,7 @@ public partial class MainWindow : Window
             model.Clips.Add(new(@"G:\ApexHighlights\d.mp4",now.AddDays(-1),33L<<20,2));
             model.ApplyAudioLevels([.12,.04,0],[true,true,true]);
             model.DeveloperMode=true;model.CanSaveReplay=true;model.HudLine="伤害 1194 · 击杀 5 · 助攻 1";
+            model.VoiceEnabled=true;model.SongPath=@"D:\Music\胜利.mp3";model.VoiceStatus="麦克风 (USB Audio) → CABLE Input · 原样直通 · 延迟 25 ms";
             model.DevLogPath=@"G:\ApexHighlights\开发者记录\Apex_dev_20261003_213000_000_4242_0.json";
             model.StatusBrush=GoodBrush;
             themeClock.Stop();
@@ -118,6 +124,7 @@ public partial class MainWindow : Window
                 model.ShortPre=7;model.ShortPost=4;model.LongPre=13;model.LongPost=8;model.Balance=-3;model.ReplayMinutes=42;model.MemoryPercent=45;
                 model.VideoResolution="1080p";model.VideoCodec="h264";model.VideoBitrateMbps=75;model.VideoPreset="p4";model.Theme="light";
                 model.BurstSeconds=6;model.BurstDamage=300;model.FastBurstSeconds=1.5;model.FastBurstDamage=160;model.StartWithWindows=true;
+                model.VoiceEnabled=true;model.VoiceOutputId="test-output";model.SongPath=Path.Combine(expected,"胜利.mp3");model.SongGainDb=-9;model.SongTrigger="result";
             }
             else
             {
@@ -127,7 +134,8 @@ public partial class MainWindow : Window
             bool restored=model.OutputDirectory==expected&&model.MicrophoneId=="test-microphone"&&!model.MicNoiseSuppression&&model.DeveloperMode&&
                 model.ShortPre==7&&model.ShortPost==4&&model.LongPre==13&&model.LongPost==8&&model.Balance==-3&&model.ReplayMinutes==42&&model.MemoryPercent==45&&
                 model.VideoResolution=="1080p"&&model.VideoCodec=="h264"&&model.VideoBitrateMbps==75&&model.VideoPreset=="p4"&&model.Theme=="light"&&
-                model.BurstSeconds==6&&model.BurstDamage==300&&model.FastBurstSeconds==1.5&&model.FastBurstDamage==160&&model.StartWithWindows;
+                model.BurstSeconds==6&&model.BurstDamage==300&&model.FastBurstSeconds==1.5&&model.FastBurstDamage==160&&model.StartWithWindows&&
+                model.VoiceEnabled&&model.VoiceOutputId=="test-output"&&model.SongPath==Path.Combine(expected,"胜利.mp3")&&model.SongGainDb==-9&&model.SongTrigger=="result";
             File.WriteAllText(args[4],JsonSerializer.Serialize(new{passed=restored,mode=args[3],settings=model.Settings()}));
             // Exit immediately, before the debounced worker configuration runs.
             exiting=true;changes.Stop();System.Windows.Application.Current.Shutdown();return;
@@ -296,6 +304,46 @@ public partial class MainWindow : Window
     {
         if(Directory.Exists(model.OutputDirectory))Process.Start(new ProcessStartInfo("explorer.exe"){UseShellExecute=true,ArgumentList={model.OutputDirectory}});
     }
+    private async Task SendVoiceAsync()
+    {
+        voiceChanges.Stop();
+        if(client is null||!model.Ready)return;
+        try{await client.SendAsync("voice",model.VoiceSettings());}catch(Exception e){Error(e.Message);}
+    }
+    private void ChooseSong_Click(object sender,RoutedEventArgs e)
+    {
+        var dialog=new Microsoft.Win32.OpenFileDialog{Title="选择要放进虚拟麦克风的歌曲",Filter="音频文件|*.mp3;*.flac;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.wma|所有文件|*.*"};
+        if(File.Exists(model.SongPath))dialog.InitialDirectory=Path.GetDirectoryName(model.SongPath);
+        if(dialog.ShowDialog(this)==true)model.SongPath=dialog.FileName;
+    }
+    private async void SongPlay_Click(object sender,RoutedEventArgs e)
+    {
+        if(client is null)return;
+        // Pending setting changes (a new song or volume) go out before the play request.
+        if(voiceChanges.IsEnabled)await SendVoiceAsync();
+        try{await client.SendAsync(model.SongPlaying?"voice_stop":"voice_play");}catch(Exception error){Error(error.Message);}
+    }
+    private void ApplyVoiceStatus(JsonElement message)
+    {
+        string state=message.GetProperty("state").GetString()??"";
+        model.SongPlaying=message.TryGetProperty("playing",out var playing)&&playing.GetBoolean();
+        if(message.TryGetProperty("message",out var note)&&!string.IsNullOrEmpty(note.GetString())){voiceNote=note.GetString()!;voiceNoteUntil=DateTime.UtcNow.AddSeconds(8);}
+        else if(state!="running")voiceNote="";
+        string Text()
+        {
+            if(state=="off")return "未开启";
+            if(state=="error")return "需要处理："+voiceNote;
+            if(state!="running")return state;
+            var parts=new List<string>{$"{message.GetProperty("microphone").GetString()} → {message.GetProperty("output").GetString()}"};
+            parts.Add(message.GetProperty("exclusive").GetBoolean()?"原样直通":"共享模式（线缆不允许独占，“其他应用”音轨会录到这路声音）");
+            if(message.GetProperty("resampled").GetBoolean())parts.Add($"采样率 {message.GetProperty("microphoneRate").GetInt32()} → {message.GetProperty("outputRate").GetInt32()} Hz 已转换");
+            parts.Add($"延迟 {message.GetProperty("latencyMs").GetDouble():0} ms");
+            if(model.SongPlaying)parts.Add("正在放："+message.GetProperty("song").GetString());
+            if(voiceNote.Length>0&&DateTime.UtcNow<voiceNoteUntil)parts.Insert(0,voiceNote);
+            return string.Join(" · ",parts);
+        }
+        model.VoiceStatus=Text();
+    }
     private async void Retry_Click(object sender,RoutedEventArgs e){if(client is not null)try{await client.SendAsync("retry");}catch(Exception error){Error(error.Message);}}
     private void Error(string message)
     {
@@ -313,7 +361,12 @@ public partial class MainWindow : Window
                 model.Microphones.Add(new(mic.GetProperty("id").GetString()??"",mic.GetProperty("name").GetString()??"麦克风"));
             if(!string.IsNullOrEmpty(selected)&&!model.Microphones.Any(m=>m.Id==selected))model.Microphones.Add(new(selected,"上次使用的麦克风（未连接）"));
             model.MicrophoneId=selected;
-            workerReady.TrySetResult();
+            var output=restoredVoiceOutputId??model.VoiceOutputId;restoredVoiceOutputId=null;
+            if(message.TryGetProperty("outputs",out var outputs))
+                foreach(var speaker in outputs.EnumerateArray())model.VoiceOutputs.Add(new(speaker.GetProperty("id").GetString()??"",speaker.GetProperty("name").GetString()??"扬声器"));
+            if(!string.IsNullOrEmpty(output)&&!model.VoiceOutputs.Any(o=>o.Id==output))model.VoiceOutputs.Add(new(output,"上次使用的输出（未连接）"));
+            model.VoiceOutputId=output;
+            workerReady.TrySetResult();_=SendVoiceAsync();
         }
         else if(type=="status")
         {
@@ -386,6 +439,7 @@ public partial class MainWindow : Window
             else if(state=="unavailable"){model.CanSaveReplay=false;model.StatusDetail="当前没有可保存的缓存";}
             else if(state=="failed")Error(message.TryGetProperty("message",out var error)?error.GetString()??"手动保存失败":"手动保存失败");
         }
+        else if(type=="voice_status")ApplyVoiceStatus(message);
         else if(type=="devlog_error"){model.DevLogError=message.GetProperty("message").GetString()??"开发者记录已停用";Error(model.DevLogError);}
         else if(type=="audio_status")
         {

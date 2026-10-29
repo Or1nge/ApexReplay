@@ -435,6 +435,48 @@
        </StackPanel>
       </Border>
 
+      <TextBlock Text="虚拟麦克风" Style="{StaticResource Section}"/>
+      <Border Style="{StaticResource Card}">
+       <StackPanel>
+        <Grid Style="{StaticResource Row}"><TextBlock Text="接入虚拟线缆" VerticalAlignment="Center"
+          ToolTip="把上面选择的麦克风原样送进 VB-Cable，不经过降噪和人声平衡；语音软件的输入设备选 CABLE Output。停止采集后仍然工作，退出应用后停止"/>
+         <CheckBox HorizontalAlignment="Right" VerticalAlignment="Center" IsChecked="{Binding VoiceEnabled, UpdateSourceTrigger=PropertyChanged}"/></Grid>
+        <Border Style="{StaticResource Rule}"/>
+        <Grid Style="{StaticResource Row}"><TextBlock Text="输出到" VerticalAlignment="Center" ToolTip="虚拟线缆的播放端，通常是 CABLE Input；本应用独占使用它"/>
+         <ComboBox Width="268" HorizontalAlignment="Right" ItemsSource="{Binding VoiceOutputs}" SelectedValuePath="Id" SelectedValue="{Binding VoiceOutputId, UpdateSourceTrigger=PropertyChanged}"/></Grid>
+        <Border Style="{StaticResource Rule}"/>
+        <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+         <TextBlock Text="歌曲" VerticalAlignment="Center" Margin="0,0,24,0" ToolTip="MP3、FLAC、WAV、M4A 等常见格式"/>
+         <TextBlock Grid.Column="1" Text="{Binding SongDisplay}" ToolTip="{Binding SongPath}" Style="{StaticResource Muted}" TextTrimming="CharacterEllipsis" TextAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0"/>
+         <Button Grid.Column="2" Click="ChooseSong_Click" VerticalAlignment="Center">
+          <StackPanel Orientation="Horizontal">
+           <TextBlock Text="&#xE8E5;" Style="{StaticResource IconText}" FontSize="12" Margin="0,0,8,0"/>
+           <TextBlock Text="选择"/>
+          </StackPanel>
+         </Button></Grid>
+        <Border Style="{StaticResource Rule}"/>
+        <Grid Style="{StaticResource Row}"><TextBlock Text="放歌时机" VerticalAlignment="Center" ToolTip="识别到自己的灭队、淘汰或击倒提示时开始放歌；正在放时不会从头再放"/>
+         <ComboBox Width="230" HorizontalAlignment="Right" ItemsSource="{Binding SongTriggers}" SelectedValuePath="Id" SelectedValue="{Binding SongTrigger, UpdateSourceTrigger=PropertyChanged}"/></Grid>
+        <Border Style="{StaticResource Rule}"/>
+        <Grid Style="{StaticResource Row}"><TextBlock Text="歌曲音量" VerticalAlignment="Center" ToolTip="歌曲混进麦克风时的音量，0 dB 为原始音量；麦克风本身的音量不变"/>
+         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Slider Width="200" Minimum="-40" Maximum="0" TickFrequency="1" Value="{Binding SongGainDb, UpdateSourceTrigger=PropertyChanged}"/>
+          <TextBox Style="{StaticResource NumberInput}" Text="{Binding SongGainDb, StringFormat=0, UpdateSourceTrigger=LostFocus}"/>
+          <TextBlock Text="dB" Style="{StaticResource Muted}" Width="32" Margin="8,0,0,0"/>
+         </StackPanel></Grid>
+        <Border Style="{StaticResource Rule}"/>
+        <Grid Style="{StaticResource Row}"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+         <TextBlock Text="状态" VerticalAlignment="Center" Margin="0,0,24,0"/>
+         <TextBlock Grid.Column="1" Text="{Binding VoiceStatus}" Style="{StaticResource Muted}" TextWrapping="Wrap" TextAlignment="Right" VerticalAlignment="Center" Margin="0,8,12,8"/>
+         <Button Grid.Column="2" Click="SongPlay_Click" VerticalAlignment="Center" ToolTip="立即把歌曲放进虚拟麦克风，再点一次停止">
+          <StackPanel Orientation="Horizontal">
+           <TextBlock Text="{Binding SongButtonIcon}" Style="{StaticResource IconText}" FontSize="12" Margin="0,0,8,0"/>
+           <TextBlock Text="{Binding SongButtonText}"/>
+          </StackPanel>
+         </Button></Grid>
+       </StackPanel>
+      </Border>
+
       <TextBlock Text="通用" Style="{StaticResource Section}"/>
       <Border Style="{StaticResource Card}">
        <StackPanel>
